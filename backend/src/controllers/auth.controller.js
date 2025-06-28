@@ -58,8 +58,8 @@ export async function signup(req, res) {
     res.cookie("jwt", token, {
       maxAge: 7 * 24 * 60 * 60 * 1000,
       httpOnly: true,
-      sameSite: "None",
-      secure: process.env.NODE_ENV === "production",
+      sameSite: "Lax", // ← đổi từ "None" sang "Lax"
+      secure: false, // ← an toàn trong môi trường development
     });
 
     res.status(201).json({ success: true, user: newUser });
@@ -93,9 +93,10 @@ export async function login(req, res) {
     res.cookie("jwt", token, {
       maxAge: 7 * 24 * 60 * 60 * 1000,
       httpOnly: true,
-      sameSite: "Strict",
-      secure: process.env.NODE_ENV === "production",
+      sameSite: "Lax", // ← đổi từ "None" sang "Lax"
+      secure: false, // ← an toàn trong môi trường development
     });
+
 
     res.status(200).json({ success: true, user });
   } catch (error) {

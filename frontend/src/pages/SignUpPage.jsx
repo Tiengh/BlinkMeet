@@ -3,7 +3,6 @@ import MessengerLogo from "../public/icon.png";
 import SignupImage from "../public/SignupImage.png";
 import { Link } from "react-router"; //
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { axiosIntance } from "../lib/axios";
 import toast from "react-hot-toast";
 import { signup } from "../lib/api";
 
