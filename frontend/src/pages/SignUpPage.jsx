@@ -2,9 +2,7 @@ import React, { useState } from "react";
 import MessengerLogo from "../public/icon.png";
 import SignupImage from "../public/SignupImage.png";
 import { Link } from "react-router"; //
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import toast from "react-hot-toast";
-import { signup } from "../lib/api";
+import useSignup from "../hooks/useSignup";
 
 const SignUpPage = () => {
   const [signupData, setSignupData] = useState({
@@ -13,20 +11,13 @@ const SignUpPage = () => {
     password: "",
   });
   console.log({ signupData });
-  const queryClient = useQueryClient();
 
-  const { mutate, isPending, error } = useMutation({
-    mutationFn: signup,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["authUser"] });
-      toast.success("Tạo tài khoản thành công!");
-    },
-  });
+  const { signUpMutation, isPending, error } = useSignup;
 
   const handleSignup = (e) => {
     e.preventDefault();
 
-    mutate(signupData);
+    signUpMutation(signupData);
   };
   return (
     <div
@@ -143,8 +134,14 @@ const SignUpPage = () => {
               type="submit"
               disabled={isPending}
             >
-              {isPending ? (<><span className="loading loading-spinner"></span>
-                Loading...</>) : ("Create Account")}
+              {isPending ? (
+                <>
+                  <span className="loading loading-spinner"></span>
+                  Loading...
+                </>
+              ) : (
+                "Create Account"
+              )}
             </button>
 
             {/* Login Link */}
