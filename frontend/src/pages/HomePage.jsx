@@ -1,18 +1,27 @@
-import React, { useEffect, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import {
-  getOutGoingFriendReqs,
+  getOutgoingFriendReqs,
   getRecommendedUsers,
   getUserFriends,
   sendFriendRequest,
-} from "../lib/api";
+} from "../lib/api.js";
 import { Link } from "react-router";
-import { MapPinIcon, UserPlusIcon, UsersIcon, CheckCircleIcon } from "lucide-react";
+import {
+  CheckCircleIcon,
+  MapPinIcon,
+  UserPlusIcon,
+  UsersIcon,
+} from "lucide-react";
+
+import { capitalize } from "../lib/utils.js";
+
 import FriendCard, { getLanguageFlag } from "../components/FriendCard";
 import NoFriendsFound from "../components/NoFriendsFound";
 
 const HomePage = () => {
-  const [outgoingRequestIds, setOutgoingRequestIds] = useState(new Set());
+  const queryClient = useQueryClient();
+  const [outgoingRequestsIds, setOutgoingRequestsIds] = useState(new Set());
 
   const { data: friends = [], isLoading: loadingFriends } = useQuery({
     queryKey: ["friends"],
@@ -24,47 +33,37 @@ const HomePage = () => {
     queryFn: getRecommendedUsers,
   });
 
-  const {
-    data: outgoingFriendReqs = [],
-    refetch: refetchOutgoing,
-  } = useQuery({
+  const { data: outgoingFriendReqs = [] } = useQuery({
     queryKey: ["outgoingFriendReqs"],
-    queryFn: getOutGoingFriendReqs,
+    queryFn: getOutgoingFriendReqs,
   });
 
   const { mutate: sendRequestMutation, isPending } = useMutation({
     mutationFn: sendFriendRequest,
-    onSuccess: (newRequest) => {
-      // ✅ Thêm ID mới vào Set ngay lập tức
-      setOutgoingRequestIds((prev) => new Set(prev).add(newRequest.recipient));
-      refetchOutgoing(); // Vẫn refetch để sync thật
-    },
-    onError: (error) => {
-      console.error(
-        "Failed to send friend request:",
-        error.response?.data || error.message
-      );
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["outgoingFriendReqs"] });
     },
   });
 
-  const flattenedFriends = friends.flatMap((entry) => entry.user_friends || []);
-  const flatRecommendedUsers = recommendedUsers;
-
   useEffect(() => {
     const outgoingIds = new Set();
-    if (outgoingFriendReqs && outgoingFriendReqs.length > 0) {
+    if (outgoingFriendReqs.length > 0) {
       outgoingFriendReqs.forEach((req) => {
-        outgoingIds.add(req.recipient);
+        if (req.recipient && req.recipient._id) {
+          outgoingIds.add(req.recipient._id);
+        }
       });
+      setOutgoingRequestsIds(outgoingIds);
     }
-    setOutgoingRequestIds(outgoingIds);
   }, [outgoingFriendReqs]);
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
       <div className="container mx-auto space-y-10">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Your Friends</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">
+            Your Friends
+          </h2>
           <Link to="/notifications" className="btn btn-outline btn-sm">
             <UsersIcon className="mr-2 size-4" />
             Friend Requests
@@ -73,13 +72,13 @@ const HomePage = () => {
 
         {loadingFriends ? (
           <div className="flex justify-center py-12">
-            <span className="loading loading-spinner loading-lg"></span>
+            <span className="loading loading-spinner loading-lg" />
           </div>
-        ) : flattenedFriends.length === 0 ? (
+        ) : friends.length === 0 ? (
           <NoFriendsFound />
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {flattenedFriends.map((friend) => (
+            {friends.map((friend) => (
               <FriendCard key={friend._id} friend={friend} />
             ))}
           </div>
@@ -89,9 +88,12 @@ const HomePage = () => {
           <div className="mb-6 sm:mb-8">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div>
-                <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Meet New Friends</h2>
+                <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">
+                  Meet New Learners
+                </h2>
                 <p className="opacity-70">
-                  Instantly connect with random language partners who match your vibe
+                  Discover perfect language exchange partners based on your
+                  profile
                 </p>
               </div>
             </div>
@@ -99,19 +101,21 @@ const HomePage = () => {
 
           {loadingUsers ? (
             <div className="flex justify-center py-12">
-              <span className="loading loading-spinner loading-lg"></span>
+              <span className="loading loading-spinner loading-lg" />
             </div>
-          ) : flatRecommendedUsers.length === 0 ? (
+          ) : recommendedUsers.length === 0 ? (
             <div className="card bg-base-200 p-6 text-center">
-              <h3 className="font-semibold text-lg mb-2">No recommendations available</h3>
+              <h3 className="font-semibold text-lg mb-2">
+                No recommendations available
+              </h3>
               <p className="text-base-content opacity-70">
                 Check back later for new language partners!
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {flatRecommendedUsers.map((user) => {
-                const hasRequestBeenSent = outgoingRequestIds.has(user._id);
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {recommendedUsers.map((user) => {
+                const hasRequestBeenSent = outgoingRequestsIds.has(user._id);
                 return (
                   <div
                     key={user._id}
@@ -120,10 +124,16 @@ const HomePage = () => {
                     <div className="card-body p-5 space-y-4">
                       <div className="flex items-center gap-3">
                         <div className="avatar size-16 rounded-full">
-                          <img src={user.user_profilePic} alt={user.user_name} />
+                          <img
+                            src={user.user_profilePic}
+                            alt={user.user_name}
+                          />
                         </div>
+
                         <div>
-                          <h3 className="font-semibold text-lg">{user.user_name}</h3>
+                          <h3 className="font-semibold text-lg">
+                            {user.user_name}
+                          </h3>
                           {user.user_location && (
                             <div className="flex items-center text-xs opacity-70 mt-1">
                               <MapPinIcon className="size-3 mr-1" />
@@ -133,8 +143,9 @@ const HomePage = () => {
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap gap-1.5 mb-3">
-                        <span className="badge badge-secondary text-xs">
+                      {/* Languages with flags */}
+                      <div className="flex flex-wrap gap-1.5">
+                        <span className="badge badge-secondary">
                           {getLanguageFlag(user.user_nativeLanguage)}
                           Native: {capitalize(user.user_nativeLanguage)}
                         </span>
@@ -148,11 +159,16 @@ const HomePage = () => {
                         <p className="text-sm opacity-70">{user.user_bio}</p>
                       )}
 
+                      {/* Action button */}
                       <button
                         className={`btn w-full mt-2 ${
                           hasRequestBeenSent ? "btn-disabled" : "btn-primary"
                         }`}
-                        onClick={() => sendRequestMutation(user._id)}
+                        onClick={() => {
+                          if (!hasRequestBeenSent) {
+                            sendRequestMutation(user._id);
+                          }
+                        }}
                         disabled={hasRequestBeenSent || isPending}
                       >
                         {hasRequestBeenSent ? (
@@ -180,5 +196,3 @@ const HomePage = () => {
 };
 
 export default HomePage;
-
-const capitalize = (str) => str.charAt(0).toUpperCase() + str.slice(1);

@@ -3,7 +3,7 @@ import { Route, Routes, Navigate } from "react-router";
 import HomePage from "./pages/HomePage.jsx";
 import CallPage from "./pages/CallPage.jsx";
 import ChatPage from "./pages/ChatPage.jsx";
-import NotificationsPage from "./pages/NotificationsPage.jsx";
+import NotificationsPage from "./pages/NotificationsPages.jsx";
 import OnboardingPage from "./pages/OnboardingPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import SignUpPage from "./pages/SignUpPage.jsx";
@@ -12,6 +12,7 @@ import PageLoader from "./components/PageLoader.jsx";
 import useAuthUser from "./hooks/useAuthUser.js";
 import Layout from "./components/Layout.jsx";
 import { useThemeStore } from "./stores/useThemeStore.js";
+import FriendPage from "./pages/FriendPage.jsx";
 
 const App = () => {
   const { isLoading, authUser } = useAuthUser();
@@ -67,7 +68,25 @@ const App = () => {
         <Route
           path="/notifications"
           element={
-            isAuthenticated ? <NotificationsPage /> : <Navigate to="/login" />
+            isAuthenticated && isOnboarded ? (
+              <Layout showSidebar={true}>
+                <NotificationsPage />
+              </Layout>
+            ) : (
+              <Navigate to={!isAuthenticated ? "/login" : "/onboarding"} />
+            )
+          }
+        />
+        <Route
+          path="/friends"
+          element={
+            isAuthenticated ? (
+              <Layout showSidebar={true}>
+                <FriendPage />
+              </Layout>
+            ) : (
+              <Navigate to="/login" />
+            )
           }
         />
         <Route
