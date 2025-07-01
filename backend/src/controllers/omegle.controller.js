@@ -1,45 +1,29 @@
-let waitingUser = null;
-let waitingCallId = null;
-let waitingResponse = null;
+let waitingQueue = [];
 
 export const getRandomCall = async (req, res) => {
   try {
     const userId = req.user._id.toString();
+    const callId = `omegle-${Date.now()}`;
 
-    // Nếu đã có người chờ và không phải chính mình
-    if (waitingUser && waitingUser !== userId) {
-      const callId = waitingCallId;
+    // Nếu có người đang chờ → ghép luôn
+    if (waitingQueue.length > 0) {
+      const peer = waitingQueue.shift(); // { userId, callId }
 
-      // Gửi callId cho người đang chờ
-      if (waitingResponse) {
-        waitingResponse.status(200).json({ callId, isHost: true });
-      }
-
-      // Gửi callId cho người vừa vào
-      waitingUser = null;
-      waitingCallId = null;
-      waitingResponse = null;
-
-      return res.status(200).json({ callId, isHost: false });
+      return res.status(200).json({
+        callId: peer.callId, // join phòng của người kia
+        isHost: false,
+      });
     }
 
-    // Nếu chưa ai chờ → lưu thông tin và chờ tiếp
-    waitingUser = userId;
-    waitingCallId = `omegle-${Date.now()}`;
-    waitingResponse = res;
+    // Không có ai → thêm vào hàng chờ
+    waitingQueue.push({ userId, callId });
 
-    // Tạm chưa trả về gì – giữ `res` lại để người kia đến sẽ dùng
-    // Nhưng cần đặt timeout tránh treo mãi:
-    setTimeout(() => {
-      if (res === waitingResponse) {
-        res.status(408).json({ message: "No match found. Try again." });
-        waitingUser = null;
-        waitingCallId = null;
-        waitingResponse = null;
-      }
-    }, 15000); // timeout 15s
+    return res.status(200).json({
+      callId, // tạo phòng trước
+      isHost: true,
+    });
   } catch (error) {
-    console.log("Error in getRandomCall controller:", error);
+    console.error("getRandomCall error:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 };
