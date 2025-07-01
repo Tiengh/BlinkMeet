@@ -12,7 +12,7 @@ const SignUpPage = () => {
   });
   console.log({ signupData });
 
-  const { signUpMutation, isPending, error } = useSignup;
+  const { signUpMutation, isPending, error } = useSignup();
 
   const handleSignup = (e) => {
     e.preventDefault();
