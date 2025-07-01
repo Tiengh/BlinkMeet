@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import MessengerLogo from "../public/icon.png";
 import SignupImage from "../public/SignupImage.png";
 import { Link } from "react-router"; //
-import useSignup from "../hooks/useSignup";
+import useSignup from "../hooks/useSignUp";
 
 const SignUpPage = () => {
   const [signupData, setSignupData] = useState({
