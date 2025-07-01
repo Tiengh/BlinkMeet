@@ -7,6 +7,7 @@ import {
   ShipWheelIcon,
   User2Icon,
   UsersIcon,
+  VideoIcon,
 } from "lucide-react";
 import MessengerLogo from "../public/icon.png";
 
@@ -50,7 +51,15 @@ const Sidebar = () => {
           <UsersIcon className="size-5 text-base-content opacity-70" />{" "}
           <span>Friends</span>
         </Link>
-
+        <Link
+          to="/omegle"
+          className={`btn btn-ghost justify-start w-full gap-3 px-3 normal-case ${
+            currentPath === "/omegle" ? "btn-active" : ""
+          }`}
+        >
+          <VideoIcon className="size-5 text-base-content opacity-70" />{" "}
+          <span>Random Call</span>
+        </Link>
         <Link
           to="/notifications"
           className={`btn btn-ghost justify-start w-full gap-3 px-3 normal-case ${

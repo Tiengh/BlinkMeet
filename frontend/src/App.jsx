@@ -13,6 +13,7 @@ import useAuthUser from "./hooks/useAuthUser.js";
 import Layout from "./components/Layout.jsx";
 import { useThemeStore } from "./stores/useThemeStore.js";
 import FriendPage from "./pages/FriendPage.jsx";
+import OmeglePage from "./pages/OmeglePage.jsx";
 
 const App = () => {
   const { isLoading, authUser } = useAuthUser();
@@ -62,6 +63,16 @@ const App = () => {
           element={
             isAuthenticated && isOnboarded ? (
               <CallPage />
+            ) : (
+              <Navigate to={!isAuthenticated ? "/login" : "/onboarding"} />
+            )
+          }
+        />
+        <Route
+          path="/omegle"
+          element={
+            isAuthenticated && isOnboarded ? (
+              <OmeglePage />
             ) : (
               <Navigate to={!isAuthenticated ? "/login" : "/onboarding"} />
             )

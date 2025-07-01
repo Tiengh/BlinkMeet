@@ -72,3 +72,8 @@ export const getStreamToken = async () => {
   console.log("getStreamToken: ", response.data);
   return response.data;
 };
+
+export const getRandomCall = async () => {
+  const response = await axiosInstance.post("/omegle/random");
+  return response.data;
+};
