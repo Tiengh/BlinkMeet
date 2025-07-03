@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import MessengerLogo from "../public/icon.png";
+import BlinkMeetLogo from "../public/icon2.png";
 import SignupImage from "../public/SignupImage.png";
 import { Link } from "react-router"; //
 import useSignup from "../hooks/useSignUp";
@@ -29,12 +30,12 @@ const SignUpPage = () => {
         <div className="w-full lg:w-1/2 p-4 sm:p-8 flex flex-col">
           <div className="mb-4 flex items-center justify-start gap-2">
             <img
-              src={MessengerLogo}
-              alt="Messenger Logo"
+              src={BlinkMeetLogo}
+              alt="BlinkMeet Logo"
               className="w-9 h-9 object-contain"
             />
             <span className="text-3xl font-bold tracking-tight bg-gradient-to-r from-[#00B2FF] via-[#8A3FFC] to-[#FF4D67] text-transparent bg-clip-text">
-              Messenger
+              BlinkMeet
             </span>
           </div>
 

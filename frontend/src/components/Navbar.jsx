@@ -2,6 +2,8 @@ import React from "react";
 import useAuthUser from "../hooks/useAuthUser";
 import { Link, useLocation } from "react-router";
 import MessengerLogo from "../public/icon.png";
+import BlinkMeetLogo from "../public/icon2.png"
+
 import { BellIcon, LogOutIcon, ShipWheelIcon, VideoIcon } from "lucide-react";
 import ThemeSelector from "./ThemeSelector";
 import { useLogout } from "../hooks/useLogout";
@@ -23,12 +25,12 @@ const Navbar = () => {
             <div className="pl-5">
               <Link to="/" className="flex items-center gap-2.5">
                 <img
-                  src={MessengerLogo}
-                  alt="Messenger Logo"
+                  src={BlinkMeetLogo}
+                  alt="BlinkMeet Logo"
                   className="w-9 h-9 object-contain"
                 />
                 <span className="text-3xl font-bold tracking-tight bg-gradient-to-r from-[#00B2FF] via-[#8A3FFC] to-[#FF4D67] text-transparent bg-clip-text">
-                  Messenger
+                  BlinkMeet
                 </span>
               </Link>
             </div>

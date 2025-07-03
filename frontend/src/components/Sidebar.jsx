@@ -10,6 +10,7 @@ import {
   VideoIcon,
 } from "lucide-react";
 import MessengerLogo from "../public/icon.png";
+import BlinkMeetLogo from "../public/icon2.png";
 
 const Sidebar = () => {
   const { authUser } = useAuthUser();
@@ -21,12 +22,12 @@ const Sidebar = () => {
       <div className="p-5 border-b border-base-300">
         <Link to="/" className="flex items-center gap-2.5">
           <img
-            src={MessengerLogo}
-            alt="Messenger Logo"
+            src={BlinkMeetLogo}
+            alt="BlinkMeet Logo"
             className="w-9 h-9 object-contain"
           />
           <span className="text-3xl font-bold tracking-tight bg-gradient-to-r from-[#00B2FF] via-[#8A3FFC] to-[#FF4D67] text-transparent bg-clip-text">
-            Messenger
+            BlinkMeet
           </span>
         </Link>
       </div>
