@@ -33,6 +33,13 @@ app.use("/api/user", userRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/omegle", omegleRoutes);
 
+app.get("/api/health", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "BlinkMeet backend is running",
+  });
+});
+
 // Serve frontend if in production
 if (process.env.NODE_ENV === "production") {
   app.use(express.static(path.join(__dirname, "../frontend/dist")));
