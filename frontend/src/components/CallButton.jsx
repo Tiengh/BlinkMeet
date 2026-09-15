@@ -2,7 +2,7 @@ import { VideoIcon } from "lucide-react";
 
 import React from "react";
 
-const CallButton = ({handleVideoCall}) => {
+const CallButton = ({ handleVideoCall }) => {
   return (
     <div className="p-3 border-b flex items-center justify-end max-w-7xl mx-auto w-full absolute top-0">
       <button

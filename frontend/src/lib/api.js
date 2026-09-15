@@ -62,7 +62,7 @@ export const getFriendRequests = async () => {
 
 export const acceptFriendRequest = async (requestId) => {
   const response = await axiosInstance.post(
-    `/user/friend-request/${requestId}/accept`
+    `/user/friend-request/${requestId}/accept`,
   );
   return response.data;
 };
@@ -73,7 +73,31 @@ export const getStreamToken = async () => {
   return response.data;
 };
 
-export const getRandomCall = async () => {
-  const response = await axiosInstance.post("/omegle/random");
+export const startRandomSearch = async (
+  excludeUserId = null,
+) => {
+  const response = await axiosInstance.post(
+    "/omegle/search",
+    {
+      excludeUserId,
+    },
+  );
+
+  return response.data;
+};
+
+export const getRandomMatchStatus = async () => {
+  const response = await axiosInstance.get(
+    "/omegle/status",
+  );
+
+  return response.data;
+};
+
+export const leaveRandomMatch = async () => {
+  const response = await axiosInstance.post(
+    "/omegle/leave",
+  );
+
   return response.data;
 };

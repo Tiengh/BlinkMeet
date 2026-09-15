@@ -21,7 +21,7 @@ const App = () => {
   const isAuthenticated = Boolean(authUser);
   const isOnboarded = authUser?.user_isOnboarded;
   console.log({ isAuthenticated, isOnboarded });
-  if (isLoading) return <PageLoader />;
+  if (isLoading) {return <PageLoader />;}
 
   return (
     <div className="h-screen" data-theme={theme}>

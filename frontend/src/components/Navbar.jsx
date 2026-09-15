@@ -2,7 +2,7 @@ import React from "react";
 import useAuthUser from "../hooks/useAuthUser";
 import { Link, useLocation } from "react-router";
 import MessengerLogo from "../public/icon.png";
-import BlinkMeetLogo from "../public/icon2.png"
+import BlinkMeetLogo from "../public/icon2.png";
 
 import { BellIcon, LogOutIcon, ShipWheelIcon, VideoIcon } from "lucide-react";
 import ThemeSelector from "./ThemeSelector";
@@ -12,7 +12,7 @@ const Navbar = () => {
   const { authUser } = useAuthUser();
   const location = useLocation();
   const isChatPage = location.pathname?.startsWith("/chat");
-  const isRandomCallPage = location.pathname?.startsWith("/omegle")
+  const isRandomCallPage = location.pathname?.startsWith("/omegle");
 
   const { logoutMutation } = useLogout();
 
