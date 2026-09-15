@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import MessengerLogo from "../public/icon.png";
-import BlinkMeetLogo from "../public/icon2.png"
+import BlinkMeetLogo from "../public/icon2.png";
 import LoginImage from "../public/Login.png";
 import { Link } from "react-router"; //
 import useLogin from "../hooks/useLogin";
