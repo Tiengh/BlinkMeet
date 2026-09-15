@@ -12,7 +12,10 @@ export const useLogout = () => {
   } = useMutation({
     mutationFn: logout,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["authUser"] });
+      queryClient.setQueryData(["authUser"], null);
+      queryClient.removeQueries({
+        predicate: ({ queryKey }) => queryKey[0] !== "authUser",
+      });
     },
   });
 
