@@ -1,21 +1,22 @@
+import { NotFoundError } from "../../shared/errors/not-found.error.js";
 import { getFriends, getRecommendedUsers } from "./user.service.js";
 
-export async function getRecommended(req, res) {
+export async function getRecommended(req, res, next) {
   try {
     res.status(200).json(await getRecommendedUsers(req.user));
   } catch (error) {
-    console.log("Error in getRecommended controller: ", error.message);
-    res.status(500).json({ message: "Internal server error" });
+    next(error);
   }
 }
 
-export async function getUserFriends(req, res) {
+export async function getUserFriends(req, res, next) {
   try {
     const user = await getFriends(req.user._id);
-    if (!user) {return res.status(404).json({ message: "User not found" });}
+    if (!user) {
+      throw new NotFoundError("User not found");
+    }
     res.status(200).json(user.user_friends);
   } catch (error) {
-    console.error("Error in getUserFriends controller:", error.message);
-    res.status(500).json({ message: "Internal server error" });
+    next(error);
   }
 }

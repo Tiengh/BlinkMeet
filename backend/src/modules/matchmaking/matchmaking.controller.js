@@ -1,28 +1,28 @@
 import { getStatus, leave, search } from "./matchmaking.service.js";
 
-export function searchRandomCall(req, res) {
+export async function searchRandomCall(req, res, next) {
   try {
-    res.status(200).json(search(req.user._id.toString(), req.body?.excludeUserId));
+    const result = await search(req.user._id.toString(), req.body?.excludeUserId);
+    res.status(200).json(result);
   } catch (error) {
-    console.error("searchRandomCall error:", error);
-    res.status(500).json({ message: "Internal server error" });
+    next(error);
   }
 }
 
-export function getRandomCallStatus(req, res) {
+export async function getRandomCallStatus(req, res, next) {
   try {
-    res.status(200).json(getStatus(req.user._id.toString()));
+    const result = await getStatus(req.user._id.toString());
+    res.status(200).json(result);
   } catch (error) {
-    console.error("getRandomCallStatus error:", error);
-    res.status(500).json({ message: "Internal server error" });
+    next(error);
   }
 }
 
-export function leaveRandomCall(req, res) {
+export async function leaveRandomCall(req, res, next) {
   try {
-    res.status(200).json(leave(req.user._id.toString()));
+    const result = await leave(req.user._id.toString());
+    res.status(200).json(result);
   } catch (error) {
-    console.error("leaveRandomCall error:", error);
-    res.status(500).json({ message: "Internal server error" });
+    next(error);
   }
 }
