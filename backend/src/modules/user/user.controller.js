@@ -12,7 +12,7 @@ export async function getRecommended(req, res) {
 export async function getUserFriends(req, res) {
   try {
     const user = await getFriends(req.user._id);
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) {return res.status(404).json({ message: "User not found" });}
     res.status(200).json(user.user_friends);
   } catch (error) {
     console.error("Error in getUserFriends controller:", error.message);

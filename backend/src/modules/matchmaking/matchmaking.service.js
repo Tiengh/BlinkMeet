@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { REMATCH_COOLDOWN } from "./matchmaking.constants.js";
 import {
   cleanupWaitingUsers,
   getMatch,
-  getRematchCooldown,
   getWaitingUser,
   getWaitingUsers,
   refreshWaitingUser,
@@ -30,11 +30,11 @@ const createMatch = (userId, candidateId) => {
 
 const findCandidate = (userId) => {
   const user = getWaitingUser(userId);
-  if (!user) return null;
+  if (!user) {return null;}
 
   const now = Date.now();
   for (const candidate of getWaitingUsers()) {
-    if (candidate.userId === userId || isExcluded(user, candidate, now)) continue;
+    if (candidate.userId === userId || isExcluded(user, candidate, now)) {continue;}
     return candidate;
   }
 
@@ -44,20 +44,20 @@ const findCandidate = (userId) => {
 export const search = (userId, excludeUserId) => {
   cleanupWaitingUsers();
   const existingMatch = getMatch(userId);
-  if (existingMatch) return existingMatch;
+  if (existingMatch) {return existingMatch;}
 
   const now = Date.now();
   const waitingUser = {
     userId,
     excludeUserId: excludeUserId ? String(excludeUserId) : null,
-    excludeUntil: excludeUserId ? now + getRematchCooldown() : 0,
+    excludeUntil: excludeUserId ? now + REMATCH_COOLDOWN : 0,
     lastSeen: now,
   };
 
   saveWaitingUser(userId, waitingUser);
 
   const candidate = findCandidate(userId);
-  if (!candidate) return { status: "waiting" };
+  if (!candidate) {return { status: "waiting" };}
 
   removeWaitingUser(userId);
   removeWaitingUser(candidate.userId);
@@ -67,14 +67,14 @@ export const search = (userId, excludeUserId) => {
 export const getStatus = (userId) => {
   cleanupWaitingUsers();
   const existingMatch = getMatch(userId);
-  if (existingMatch) return existingMatch;
+  if (existingMatch) {return existingMatch;}
 
   const waitingUser = getWaitingUser(userId);
-  if (!waitingUser) return { status: "idle" };
+  if (!waitingUser) {return { status: "idle" };}
 
   refreshWaitingUser(userId, Date.now());
   const candidate = findCandidate(userId);
-  if (!candidate) return { status: "waiting" };
+  if (!candidate) {return { status: "waiting" };}
 
   removeWaitingUser(userId);
   removeWaitingUser(candidate.userId);

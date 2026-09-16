@@ -1,4 +1,4 @@
-export const errorMiddleware = (error, req, res, next) => {
+export const errorMiddleware = (error, req, res, _next) => {
   console.error("Unhandled app error:", error);
 
   if (error?.statusCode) {

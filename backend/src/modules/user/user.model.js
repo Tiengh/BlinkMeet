@@ -14,11 +14,11 @@ const userSchema = new mongoose.Schema(
     user_isOnboarded: { type: Boolean, default: false },
     user_friends: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 userSchema.pre("save", async function (next) {
-  if (!this.isModified("user_password")) return next();
+  if (!this.isModified("user_password")) {return next();}
 
   try {
     const salt = await bcrypt.genSalt(10);
