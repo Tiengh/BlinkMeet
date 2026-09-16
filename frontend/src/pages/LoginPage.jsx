@@ -41,7 +41,11 @@ const LoginPage = () => {
           {/* ERROR MESSAGE*/}
           {error && (
             <div className="alert alert-error mb-5">
-              <span>{error.response.data.message}</span>
+              <span>
+                {error?.response?.data?.message ||
+                  error?.message ||
+                  "Login failed. Please try again."}
+              </span>
             </div>
           )}
           <form onSubmit={handleLogin} className="w-full">

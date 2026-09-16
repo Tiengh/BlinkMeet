@@ -8,6 +8,7 @@ import userRoutes from "./modules/user/user.routes.js";
 import friendRoutes from "./modules/friend/friend.routes.js";
 import chatRoutes from "./modules/chat/chat.routes.js";
 import matchmakingRoutes from "./modules/matchmaking/matchmaking.routes.js";
+import { errorMiddleware } from "./middleware/error.middleware.js";
 
 const app = express();
 const __dirname = path.resolve();
@@ -32,5 +33,7 @@ if (process.env.NODE_ENV === "production") {
     res.sendFile(path.join(__dirname, "../frontend/dist/index.html"));
   });
 }
+
+app.use(errorMiddleware);
 
 export default app;

@@ -42,7 +42,11 @@ const SignUpPage = () => {
           {/* ERROR MESSAGE*/}
           {error && (
             <div className="alert alert-error mb-5">
-              <span>{error.response.data.message}</span>
+              <span>
+                {error?.response?.data?.message ||
+                  error?.message ||
+                  "Sign up failed. Please try again."}
+              </span>
             </div>
           )}
           <form onSubmit={handleSignup} className="w-full">

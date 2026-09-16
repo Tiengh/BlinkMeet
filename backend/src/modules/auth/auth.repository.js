@@ -1,6 +1,8 @@
 import User from "../user/user.model.js";
 
-export const findUserByEmail = (email) => User.findOne({ user_email: email });
+export const findUserByEmail = (email) =>
+  User.findOne({ user_email: email }).select("+user_password");
+
 export const createUser = (data) => User.create(data);
 export const updateUser = (userId, data) =>
-  User.findByIdAndUpdate(userId, data, { new: true });
+  User.findByIdAndUpdate(userId, data, { new: true }).select("-user_password");

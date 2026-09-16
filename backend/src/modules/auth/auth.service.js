@@ -1,31 +1,25 @@
 import jwt from "jsonwebtoken";
 import { upsertStreamUser } from "../../lib/stream.js";
+import { BadRequestError } from "../../shared/errors/bad-request.error.js";
+import { NotFoundError } from "../../shared/errors/not-found.error.js";
+import { UnauthorizedError } from "../../shared/errors/unauthorized.error.js";
 import { createUser, findUserByEmail, updateUser } from "./auth.repository.js";
 
 const createToken = (userId) =>
   jwt.sign({ userId }, process.env.JWT_SECRET_KEY, { expiresIn: "7d" });
 
-export const setAuthCookie = (res, token) => {
-  res.cookie("jwt", token, {
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-    httpOnly: true,
-    sameSite: "Lax",
-    secure: false,
-  });
-};
-
 export async function signupUser({ email, password, name }) {
   if (!email || !password || !name) {
-    return { error: { status: 400, message: "All fields are required" } };
+    throw new BadRequestError("All fields are required");
   }
   if (password.length < 8) {
-    return { error: { status: 400, message: "Password must be at least 8 characters" } };
+    throw new BadRequestError("Password must be at least 8 characters");
   }
   if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email)) {
-    return { error: { status: 400, message: "Invalid email format" } };
+    throw new BadRequestError("Invalid email format");
   }
   if (await findUserByEmail(email)) {
-    return { error: { status: 400, message: "Already existed, use a different email" } };
+    throw new BadRequestError("Already existed, use a different email");
   }
 
   const avatarSeed = Math.random().toString(36).substring(2, 10);
@@ -42,13 +36,13 @@ export async function signupUser({ email, password, name }) {
 
 export async function loginUser({ email, password }) {
   if (!email || !password) {
-    return { error: { status: 400, message: "All fields are required" } };
+    throw new BadRequestError("All fields are required");
   }
 
   const user = await findUserByEmail(email);
-  if (!user) return { error: { status: 401, message: "Invalid email" } };
+  if (!user) throw new UnauthorizedError("Invalid email");
   if (!(await user.matchPassword(password))) {
-    return { error: { status: 401, message: "Invalid password" } };
+    throw new UnauthorizedError("Invalid password");
   }
 
   return { user, token: createToken(user._id) };
@@ -64,7 +58,7 @@ export async function onboardUser(userId, data) {
   if (!location) missingFields.push("location");
 
   if (missingFields.length) {
-    return { error: { status: 400, message: "All fields are required", missingFields } };
+    throw new BadRequestError("All fields are required", missingFields);
   }
 
   const user = await updateUser(userId, {
@@ -75,7 +69,7 @@ export async function onboardUser(userId, data) {
     user_location: location,
     user_isOnboarded: true,
   });
-  if (!user) return { error: { status: 404, message: "User not found" } };
+  if (!user) throw new NotFoundError("User not found");
 
   await syncStreamUser(user);
   return { user };
