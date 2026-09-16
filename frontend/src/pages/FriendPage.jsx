@@ -1,9 +1,6 @@
-import React, { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  getOutgoingFriendReqs,
-  getUserFriends,
-} from "../lib/api.js";
+import React from "react";
+import { useQuery } from "@tanstack/react-query";
+import { getUserFriends } from "../lib/api.js";
 import { Link } from "react-router";
 import { UsersIcon } from "lucide-react";
 
@@ -11,30 +8,10 @@ import FriendCard from "../components/FriendCard";
 import NoFriendsFound from "../components/NoFriendsFound";
 
 const FriendPage = () => {
-  const queryClient = useQueryClient();
-  const [outgoingRequestsIds, setOutgoingRequestsIds] = useState(new Set());
-
   const { data: friends = [], isLoading: loadingFriends } = useQuery({
     queryKey: ["friends"],
     queryFn: getUserFriends,
   });
-
-  const { data: outgoingFriendReqs = [] } = useQuery({
-    queryKey: ["outgoingFriendReqs"],
-    queryFn: getOutgoingFriendReqs,
-  });
-
-  useEffect(() => {
-    const outgoingIds = new Set();
-    if (outgoingFriendReqs.length > 0) {
-      outgoingFriendReqs.forEach((req) => {
-        if (req.recipient && req.recipient._id) {
-          outgoingIds.add(req.recipient._id);
-        }
-      });
-      setOutgoingRequestsIds(outgoingIds);
-    }
-  }, [outgoingFriendReqs]);
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">

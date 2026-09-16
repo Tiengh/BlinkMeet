@@ -1,7 +1,5 @@
-import React, {
-  useEffect,
-  useState,
-} from "react";
+import React from "react";
+import toast from "react-hot-toast";
 
 import {
   useNavigate,
@@ -9,16 +7,6 @@ import {
 } from "react-router";
 
 import useAuthUser from "../hooks/useAuthUser";
-
-import {
-  useQuery,
-} from "@tanstack/react-query";
-
-import {
-  getStreamToken,
-} from "../lib/api";
-
-import toast from "react-hot-toast";
 
 import ChatLoader from "../components/ChatLoader";
 
@@ -37,14 +25,8 @@ import {
   Window,
 } from "stream-chat-react";
 
-import {
-  StreamChat,
-} from "stream-chat";
-
 import CallButton from "../components/CallButton";
-
-const STREAM_API_KEY =
-  import.meta.env.VITE_STREAM_API_KEY;
+import useStreamChat from "../hooks/useStreamChat";
 
 const ChatPage = () => {
   const {
@@ -58,148 +40,13 @@ const ChatPage = () => {
     authUser,
   } = useAuthUser();
 
-  const [
-    chatClient,
-    setChatClient,
-  ] = useState(null);
-
-  const [
-    channel,
-    setChannel,
-  ] = useState(null);
-
-  const [
-    loading,
-    setLoading,
-  ] = useState(true);
-
-  const [
-    error,
-    setError,
-  ] = useState(null);
-
   const {
-    data: tokenData,
-    refetch: refetchToken,
-  } = useQuery({
-    queryKey: ["streamToken"],
-    queryFn: getStreamToken,
-    enabled: !!authUser,
-  });
-
-  useEffect(() => {
-    if (
-      !tokenData?.token ||
-      !authUser?._id ||
-      !targetUserId ||
-      !STREAM_API_KEY
-    ) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const client =
-      StreamChat.getInstance(
-        STREAM_API_KEY,
-      );
-
-    const initChat =
-      async () => {
-        try {
-          setLoading(true);
-          setError(null);
-
-          if (!client.userID) {
-            await client.connectUser(
-              {
-                id: String(
-                  authUser._id,
-                ),
-                name:
-                  authUser.user_name,
-                image:
-                  authUser.user_profilePic,
-              },
-              tokenData.token,
-            );
-          }
-
-          if (cancelled) {
-            return;
-          }
-
-          const channelId = [
-            String(
-              authUser._id,
-            ),
-            String(
-              targetUserId,
-            ),
-          ]
-            .sort()
-            .join("_");
-
-          const currentChannel =
-            client.channel(
-              "messaging",
-              channelId,
-              {
-                members: [
-                  String(
-                    authUser._id,
-                  ),
-                  String(
-                    targetUserId,
-                  ),
-                ],
-              },
-            );
-
-          await currentChannel.watch();
-
-          if (cancelled) {
-            return;
-          }
-
-          setChatClient(client);
-          setChannel(
-            currentChannel,
-          );
-        } catch (error) {
-          if (cancelled) {
-            return;
-          }
-
-          console.error(
-            "Error initializing chat:",
-            error,
-          );
-
-          setError(error);
-
-          toast.error(
-            "Could not connect to chat.",
-          );
-        } finally {
-          if (!cancelled) {
-            setLoading(false);
-          }
-        }
-      };
-
-    initChat();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    tokenData?.token,
-    authUser?._id,
-    authUser?.user_name,
-    authUser?.user_profilePic,
-    targetUserId,
-  ]);
+    client: chatClient,
+    channel,
+    error,
+    isLoading: loading,
+    retry: retryChat,
+  } = useStreamChat({ authUser, targetUserId });
 
   const handleVideoCall =
     async () => {
@@ -231,22 +78,9 @@ const ChatPage = () => {
       }
     };
 
-  const handleRetry =
-    async () => {
-      setError(null);
-      setLoading(true);
-
-      try {
-        await refetchToken();
-      } catch (error) {
-        console.error(
-          "Retry failed:",
-          error,
-        );
-
-        setLoading(false);
-      }
-    };
+  const handleRetry = () => {
+    retryChat();
+  };
 
   if (loading) {
     return <ChatLoader />;

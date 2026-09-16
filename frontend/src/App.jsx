@@ -14,118 +14,98 @@ import Layout from "./components/Layout.jsx";
 import { useThemeStore } from "./stores/useThemeStore.js";
 import FriendPage from "./pages/FriendPage.jsx";
 import OmeglePage from "./pages/OmeglePage.jsx";
+import {
+  OnboardingOnly,
+  PublicOnly,
+  RequireOnboarding,
+} from "./components/RouteGuards.jsx";
 
 const App = () => {
   const { isLoading, authUser } = useAuthUser();
   const { theme } = useThemeStore();
-  const isAuthenticated = Boolean(authUser);
-  const isOnboarded = authUser?.user_isOnboarded;
-  console.log({ isAuthenticated, isOnboarded });
   if (isLoading) {return <PageLoader />;}
 
   return (
-    <div className="h-screen" data-theme={theme}>
+    <div className="h-full" data-theme={theme}>
       <Routes>
         <Route
           path="/"
           element={
-            isAuthenticated && isOnboarded ? (
+            <RequireOnboarding authUser={authUser}>
               <Layout showSidebar={true}>
                 <HomePage />
               </Layout>
-            ) : (
-              <Navigate to={!isAuthenticated ? "/login" : "/onboarding"} />
-            )
+            </RequireOnboarding>
           }
         />
         <Route
           path="/login"
           element={
-            !isAuthenticated ? (
+            <PublicOnly authUser={authUser}>
               <LoginPage />
-            ) : (
-              <Navigate to={isOnboarded ? "/" : "/onboarding"} />
-            )
+            </PublicOnly>
           }
         />
         <Route
           path="/signup"
           element={
-            !isAuthenticated ? (
+            <PublicOnly authUser={authUser}>
               <SignUpPage />
-            ) : (
-              <Navigate to={isOnboarded ? "/" : "/onboarding"} />
-            )
+            </PublicOnly>
           }
         />
         <Route
           path="/call/:id"
           element={
-            isAuthenticated && isOnboarded ? (
+            <RequireOnboarding authUser={authUser}>
               <CallPage />
-            ) : (
-              <Navigate to={!isAuthenticated ? "/login" : "/onboarding"} />
-            )
+            </RequireOnboarding>
           }
         />
         <Route
           path="/omegle"
           element={
-            isAuthenticated && isOnboarded ? (
+            <RequireOnboarding authUser={authUser}>
               <OmeglePage />
-            ) : (
-              <Navigate to={!isAuthenticated ? "/login" : "/onboarding"} />
-            )
+            </RequireOnboarding>
           }
         />
         <Route
           path="/chat/:id"
           element={
-            isAuthenticated && isOnboarded ? (
+            <RequireOnboarding authUser={authUser}>
               <Layout showSidebar={false}>
                 <ChatPage />
               </Layout>
-            ) : (
-              <Navigate to={!isAuthenticated ? "/login" : "/onboarding"} />
-            )
+            </RequireOnboarding>
           }
         />
         <Route
           path="/notifications"
           element={
-            isAuthenticated && isOnboarded ? (
+            <RequireOnboarding authUser={authUser}>
               <Layout showSidebar={true}>
                 <NotificationsPage />
               </Layout>
-            ) : (
-              <Navigate to={!isAuthenticated ? "/login" : "/onboarding"} />
-            )
+            </RequireOnboarding>
           }
         />
         <Route
           path="/friends"
           element={
-            isAuthenticated ? (
+            <RequireOnboarding authUser={authUser}>
               <Layout showSidebar={true}>
                 <FriendPage />
               </Layout>
-            ) : (
-              <Navigate to="/login" />
-            )
+            </RequireOnboarding>
           }
         />
         <Route
           path="/onboarding"
           element={
-            isAuthenticated ? (
-              !isOnboarded ? (
-                <OnboardingPage />
-              ) : (
-                <Navigate to="/" />
-              )
-            ) : (
-              <Navigate to="/login" />
-            )
+            <OnboardingOnly authUser={authUser}>
+              <OnboardingPage />
+            </OnboardingOnly>
           }
         />
       </Routes>

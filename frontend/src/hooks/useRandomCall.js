@@ -5,8 +5,6 @@ import {
   useState,
 } from "react";
 
-import { useQuery } from "@tanstack/react-query";
-
 import {
   StreamVideoClient,
 } from "@stream-io/video-react-sdk";
@@ -15,10 +13,10 @@ import toast from "react-hot-toast";
 
 import {
   getRandomMatchStatus,
-  getStreamToken,
   leaveRandomMatch,
   startRandomSearch,
 } from "../lib/api";
+import useStreamToken from "./useStreamToken";
 
 import {
   enableAvailableMedia,
@@ -52,11 +50,9 @@ const useRandomCall = ({
   const {
     data: tokenData,
     isLoading: isTokenLoading,
-  } = useQuery({
-    queryKey: ["streamToken"],
-    queryFn: getStreamToken,
-    enabled: !!authUser,
-  });
+    isError: isTokenError,
+    refetch: refetchToken,
+  } = useStreamToken(authUser?._id);
 
   useEffect(() => {
     if (
@@ -450,10 +446,15 @@ const useRandomCall = ({
       return;
     }
 
+    if (isTokenError) {
+      void refetchToken();
+      return;
+    }
+
     setPhase("searching");
 
     setSearchVersion((version) => version + 1);
-  }, []);
+  }, [isTokenError, refetchToken]);
 
   const handleLeaveCall = useCallback(
     async (error) => {
@@ -475,10 +476,14 @@ const useRandomCall = ({
         retryTimerRef.current = null;
       }
 
+      const activeCall = currentCallRef.current;
+
       currentCallRef.current = null;
       currentPeerIdRef.current = null;
 
       setCall(null);
+
+      await activeCall?.leave().catch(console.error);
 
       try {
         await leaveRandomMatch();
@@ -517,13 +522,13 @@ const useRandomCall = ({
   const isLoading =
     !authUser ||
     isTokenLoading ||
-    !tokenData?.token ||
-    !videoClient;
+    (!tokenData?.token && !isTokenError) ||
+    (!videoClient && !isTokenError);
 
   return {
     videoClient,
     call,
-    phase,
+    phase: isTokenError ? "error" : phase,
     isLoading,
 
     handleNext,

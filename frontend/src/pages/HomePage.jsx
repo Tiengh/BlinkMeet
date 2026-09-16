@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
 import {
   getOutgoingFriendReqs,
   getRecommendedUsers,
@@ -16,13 +15,12 @@ import {
 
 import { capitalize } from "../lib/utils.js";
 
-import FriendCard, { getLanguageFlag } from "../components/FriendCard";
+import FriendCard from "../components/FriendCard";
+import LanguageFlag from "../components/LanguageFlag";
 import NoFriendsFound from "../components/NoFriendsFound";
 
 const HomePage = () => {
   const queryClient = useQueryClient();
-  const [outgoingRequestsIds, setOutgoingRequestsIds] = useState(new Set());
-
   const { data: friends = [], isLoading: loadingFriends } = useQuery({
     queryKey: ["friends"],
     queryFn: getUserFriends,
@@ -45,17 +43,12 @@ const HomePage = () => {
     },
   });
 
-  useEffect(() => {
-    const outgoingIds = new Set();
-    if (outgoingFriendReqs.length > 0) {
-      outgoingFriendReqs.forEach((req) => {
-        if (req.recipient && req.recipient._id) {
-          outgoingIds.add(req.recipient._id);
-        }
-      });
-      setOutgoingRequestsIds(outgoingIds);
-    }
-  }, [outgoingFriendReqs]);
+  const outgoingRequestIds = new Set(
+    outgoingFriendReqs
+      .map((request) => request.recipient?._id)
+      .filter(Boolean)
+      .map(String),
+  );
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
@@ -115,7 +108,9 @@ const HomePage = () => {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {recommendedUsers.map((user) => {
-                const hasRequestBeenSent = outgoingRequestsIds.has(user._id);
+                const hasRequestBeenSent = outgoingRequestIds.has(
+                  String(user._id),
+                );
                 return (
                   <div
                     key={user._id}
@@ -146,11 +141,11 @@ const HomePage = () => {
                       {/* Languages with flags */}
                       <div className="flex flex-wrap gap-1.5">
                         <span className="badge badge-secondary">
-                          {getLanguageFlag(user.user_nativeLanguage)}
+                          <LanguageFlag language={user.user_nativeLanguage} />
                           Native: {capitalize(user.user_nativeLanguage)}
                         </span>
                         <span className="badge badge-outline">
-                          {getLanguageFlag(user.user_learningLanguage)}
+                          <LanguageFlag language={user.user_learningLanguage} />
                           Learning: {capitalize(user.user_learningLanguage)}
                         </span>
                       </div>
