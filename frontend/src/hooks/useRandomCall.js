@@ -44,6 +44,7 @@ const useRandomCall = ({
   const joiningRef = useRef(false);
   const transitioningRef = useRef(false);
   const leavingPageRef = useRef(false);
+  const leftCallsRef = useRef(new WeakSet());
 
   const retryTimerRef = useRef(null);
 
@@ -53,6 +54,22 @@ const useRandomCall = ({
     isError: isTokenError,
     refetch: refetchToken,
   } = useStreamToken(authUser?._id);
+
+  const leaveCallSafely = useCallback(async (targetCall) => {
+    if (!targetCall || leftCallsRef.current.has(targetCall)) {
+      return;
+    }
+
+    leftCallsRef.current.add(targetCall);
+
+    try {
+      await targetCall.leave();
+    } catch (error) {
+      if (!String(error?.message).includes("already been left")) {
+        console.error("Failed to leave call:", error);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     if (
@@ -101,16 +118,7 @@ const useRandomCall = ({
 
     setCall(null);
 
-    if (activeCall) {
-      try {
-        await activeCall.leave();
-      } catch (error) {
-        console.error(
-          "Failed to leave call:",
-          error,
-        );
-      }
-    }
+    await leaveCallSafely(activeCall);
 
     try {
       await leaveRandomMatch();
@@ -120,7 +128,7 @@ const useRandomCall = ({
         error,
       );
     }
-  }, []);
+  }, [leaveCallSafely]);
 
   const restartSearch = useCallback(
     async ({
@@ -196,7 +204,7 @@ const useRandomCall = ({
           cancelled ||
           leavingPageRef.current
         ) {
-          await nextCall.leave().catch(console.error);
+          await leaveCallSafely(nextCall);
           return;
         }
 
@@ -223,7 +231,7 @@ const useRandomCall = ({
         );
 
         if (nextCall) {
-          await nextCall.leave().catch(console.error);
+          await leaveCallSafely(nextCall);
         }
 
         currentCallRef.current = null;
@@ -364,6 +372,7 @@ const useRandomCall = ({
       }
     };
   }, [
+    leaveCallSafely,
     videoClient,
     searchVersion,
   ]);
@@ -465,10 +474,12 @@ const useRandomCall = ({
       leavingPageRef.current = true;
 
       if (error) {
-        console.error(
-          "Stream leave call error:",
-          error,
-        );
+        if (!String(error?.message).includes("already been left")) {
+          console.error(
+            "Stream leave call error:",
+            error,
+          );
+        }
       }
 
       if (retryTimerRef.current) {
@@ -483,7 +494,7 @@ const useRandomCall = ({
 
       setCall(null);
 
-      await activeCall?.leave().catch(console.error);
+      await leaveCallSafely(activeCall);
 
       try {
         await leaveRandomMatch();
@@ -496,7 +507,7 @@ const useRandomCall = ({
 
       onLeave?.();
     },
-    [onLeave],
+    [leaveCallSafely, onLeave],
   );
 
   useEffect(() => {
@@ -512,12 +523,12 @@ const useRandomCall = ({
       const activeCall = currentCallRef.current;
 
       if (activeCall) {
-        activeCall.leave().catch(console.error);
+        leaveCallSafely(activeCall);
       }
 
       leaveRandomMatch().catch(console.error);
     };
-  }, []);
+  }, [leaveCallSafely]);
 
   const isLoading =
     !authUser ||

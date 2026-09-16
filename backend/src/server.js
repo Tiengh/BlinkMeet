@@ -1,56 +1,12 @@
-import "dotenv/config"; // Load biến môi trường đầu tiên!
+import "dotenv/config";
+import app from "./app.js";
+import { connectMongoDB } from "./infrastructure/database/mongodb.js";
+import { initStreamClient } from "./lib/stream.js";
 
-import express from "express";
-import authRoutes from "./routes/auth.route.js";
-import userRoutes from "./routes/user.route.js";
-import chatRoutes from "./routes/chat.route.js";
-import omegleRoutes from "./routes/omegle.route.js";
-
-import { connectDB } from "./lib/db.js";
-import { initStreamClient } from "./lib/stream.js"; // ✅ thêm dòng này
-import cookieParser from "cookie-parser";
-import cors from "cors";
-import path from "path";
-
-const app = express();
 const PORT = process.env.PORT || 3000;
 
-const __dirname = path.resolve();
-
-// Middlewares
-app.use(
-  cors({
-    origin: "http://localhost:5173", // Bạn có thể thay bằng biến môi trường nếu deploy
-    credentials: true,
-  })
-);
-app.use(express.json());
-app.use(cookieParser());
-
-// Routes
-app.use("/api/auth/", authRoutes);
-app.use("/api/user", userRoutes);
-app.use("/api/chat", chatRoutes);
-app.use("/api/omegle", omegleRoutes);
-
-app.get("/api/health", (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: "BlinkMeet backend is running",
-  });
-});
-
-// Serve frontend if in production
-if (process.env.NODE_ENV === "production") {
-  app.use(express.static(path.join(__dirname, "../frontend/dist")));
-  app.get("*", (req, res) => {
-    res.sendFile(path.join(__dirname, "../frontend/dist/index.html"));
-  });
-}
-
-// Start server
 app.listen(PORT, () => {
   console.log("✅ Server is running on port:", PORT);
-  connectDB();
-  initStreamClient(); // ✅ gọi ở đây, sau khi biến env đã chắc chắn tồn tại
+  connectMongoDB();
+  initStreamClient();
 });
