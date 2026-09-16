@@ -3,6 +3,7 @@ import { upsertStreamUser } from "../../lib/stream.js";
 import { BadRequestError } from "../../shared/errors/bad-request.error.js";
 import { NotFoundError } from "../../shared/errors/not-found.error.js";
 import { UnauthorizedError } from "../../shared/errors/unauthorized.error.js";
+import { toPublicUser } from "./auth.mapper.js";
 import { createUser, findUserByEmail, updateUser } from "./auth.repository.js";
 
 const createToken = (userId) =>
@@ -31,7 +32,7 @@ export async function signupUser({ email, password, name }) {
   });
 
   await syncStreamUser(user);
-  return { user, token: createToken(user._id) };
+  return { user: toPublicUser(user), token: createToken(user._id) };
 }
 
 export async function loginUser({ email, password }) {
@@ -40,22 +41,22 @@ export async function loginUser({ email, password }) {
   }
 
   const user = await findUserByEmail(email);
-  if (!user) throw new UnauthorizedError("Invalid email");
+  if (!user) {throw new UnauthorizedError("Invalid email");}
   if (!(await user.matchPassword(password))) {
     throw new UnauthorizedError("Invalid password");
   }
 
-  return { user, token: createToken(user._id) };
+  return { user: toPublicUser(user), token: createToken(user._id) };
 }
 
 export async function onboardUser(userId, data) {
   const { name, bio, nativeLanguage, learningLanguage, location } = data;
   const missingFields = [];
-  if (!name) missingFields.push("name");
-  if (!bio) missingFields.push("bio");
-  if (!nativeLanguage) missingFields.push("nativeLanguage");
-  if (!learningLanguage) missingFields.push("learningLanguage");
-  if (!location) missingFields.push("location");
+  if (!name) {missingFields.push("name");}
+  if (!bio) {missingFields.push("bio");}
+  if (!nativeLanguage) {missingFields.push("nativeLanguage");}
+  if (!learningLanguage) {missingFields.push("learningLanguage");}
+  if (!location) {missingFields.push("location");}
 
   if (missingFields.length) {
     throw new BadRequestError("All fields are required", missingFields);
@@ -69,10 +70,10 @@ export async function onboardUser(userId, data) {
     user_location: location,
     user_isOnboarded: true,
   });
-  if (!user) throw new NotFoundError("User not found");
+  if (!user) {throw new NotFoundError("User not found");}
 
   await syncStreamUser(user);
-  return { user };
+  return { user: toPublicUser(user) };
 }
 
 async function syncStreamUser(user) {

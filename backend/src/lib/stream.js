@@ -18,7 +18,7 @@ export const initStreamClient = () => {
 };
 
 export const upsertStreamUser = async (userData) => {
-  if (!streamClient) initStreamClient();
+  if (!streamClient) {initStreamClient();}
 
   try {
     await streamClient.upsertUser(userData);
@@ -29,7 +29,7 @@ export const upsertStreamUser = async (userData) => {
 };
 
 export const generateStreamToken = (userId) => {
-  if (!streamClient) initStreamClient();
+  if (!streamClient) {initStreamClient();}
 
   try {
     const userIdStr = userId.toString();
