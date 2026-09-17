@@ -8,8 +8,8 @@ import {
   refreshWaitingUser,
   removeMatch,
   removeWaitingUser,
-  saveMatch,
   saveWaitingUser,
+  tryCreateMatch,
 } from "./matchmaking.repository.js";
 
 const isExcluded = (user, candidate, now) =>
@@ -20,18 +20,13 @@ const generateCallId = () => `omegle-${randomUUID()}`;
 
 const createMatch = async (userId, candidateId) => {
   const callId = generateCallId();
-  const userMatch = { status: "matched", callId, peerId: candidateId };
-  const candidateMatch = { status: "matched", callId, peerId: userId };
-
-  await saveMatch(userId, userMatch);
-  await saveMatch(candidateId, candidateMatch);
-  return userMatch;
+  return tryCreateMatch(userId, candidateId, callId);
 };
 
-const findCandidate = async (userId) => {
+const findMatch = async (userId) => {
   const user = await getWaitingUser(userId);
   if (!user) {
-    return null;
+    return getMatch(userId);
   }
 
   const now = Date.now();
@@ -40,7 +35,16 @@ const findCandidate = async (userId) => {
     if (candidate.userId === userId || isExcluded(user, candidate, now)) {
       continue;
     }
-    return candidate;
+
+    const match = await createMatch(userId, candidate.userId);
+    if (match) {
+      return match;
+    }
+
+    const existingMatch = await getMatch(userId);
+    if (existingMatch) {
+      return existingMatch;
+    }
   }
 
   return null;
@@ -63,14 +67,12 @@ export const search = async (userId, excludeUserId) => {
 
   await saveWaitingUser(userId, waitingUser);
 
-  const candidate = await findCandidate(userId);
-  if (!candidate) {
+  const match = await findMatch(userId);
+  if (!match) {
     return { status: "waiting" };
   }
 
-  await removeWaitingUser(userId);
-  await removeWaitingUser(candidate.userId);
-  return createMatch(userId, candidate.userId);
+  return match;
 };
 
 export const getStatus = async (userId) => {
@@ -86,14 +88,12 @@ export const getStatus = async (userId) => {
   }
 
   await refreshWaitingUser(userId, Date.now());
-  const candidate = await findCandidate(userId);
-  if (!candidate) {
+  const match = await findMatch(userId);
+  if (!match) {
     return { status: "waiting" };
   }
 
-  await removeWaitingUser(userId);
-  await removeWaitingUser(candidate.userId);
-  return createMatch(userId, candidate.userId);
+  return match;
 };
 
 export const leave = async (userId) => {
