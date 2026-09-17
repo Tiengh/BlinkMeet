@@ -18,33 +18,40 @@ const isExcluded = (user, candidate, now) =>
 
 const generateCallId = () => `omegle-${randomUUID()}`;
 
-const createMatch = (userId, candidateId) => {
+const createMatch = async (userId, candidateId) => {
   const callId = generateCallId();
   const userMatch = { status: "matched", callId, peerId: candidateId };
   const candidateMatch = { status: "matched", callId, peerId: userId };
 
-  saveMatch(userId, userMatch);
-  saveMatch(candidateId, candidateMatch);
+  await saveMatch(userId, userMatch);
+  await saveMatch(candidateId, candidateMatch);
   return userMatch;
 };
 
-const findCandidate = (userId) => {
-  const user = getWaitingUser(userId);
-  if (!user) {return null;}
+const findCandidate = async (userId) => {
+  const user = await getWaitingUser(userId);
+  if (!user) {
+    return null;
+  }
 
   const now = Date.now();
-  for (const candidate of getWaitingUsers()) {
-    if (candidate.userId === userId || isExcluded(user, candidate, now)) {continue;}
+  const waitingUsers = await getWaitingUsers();
+  for (const candidate of waitingUsers) {
+    if (candidate.userId === userId || isExcluded(user, candidate, now)) {
+      continue;
+    }
     return candidate;
   }
 
   return null;
 };
 
-export const search = (userId, excludeUserId) => {
-  cleanupWaitingUsers();
-  const existingMatch = getMatch(userId);
-  if (existingMatch) {return existingMatch;}
+export const search = async (userId, excludeUserId) => {
+  await cleanupWaitingUsers();
+  const existingMatch = await getMatch(userId);
+  if (existingMatch) {
+    return existingMatch;
+  }
 
   const now = Date.now();
   const waitingUser = {
@@ -54,35 +61,43 @@ export const search = (userId, excludeUserId) => {
     lastSeen: now,
   };
 
-  saveWaitingUser(userId, waitingUser);
+  await saveWaitingUser(userId, waitingUser);
 
-  const candidate = findCandidate(userId);
-  if (!candidate) {return { status: "waiting" };}
+  const candidate = await findCandidate(userId);
+  if (!candidate) {
+    return { status: "waiting" };
+  }
 
-  removeWaitingUser(userId);
-  removeWaitingUser(candidate.userId);
+  await removeWaitingUser(userId);
+  await removeWaitingUser(candidate.userId);
   return createMatch(userId, candidate.userId);
 };
 
-export const getStatus = (userId) => {
-  cleanupWaitingUsers();
-  const existingMatch = getMatch(userId);
-  if (existingMatch) {return existingMatch;}
+export const getStatus = async (userId) => {
+  await cleanupWaitingUsers();
+  const existingMatch = await getMatch(userId);
+  if (existingMatch) {
+    return existingMatch;
+  }
 
-  const waitingUser = getWaitingUser(userId);
-  if (!waitingUser) {return { status: "idle" };}
+  const waitingUser = await getWaitingUser(userId);
+  if (!waitingUser) {
+    return { status: "idle" };
+  }
 
-  refreshWaitingUser(userId, Date.now());
-  const candidate = findCandidate(userId);
-  if (!candidate) {return { status: "waiting" };}
+  await refreshWaitingUser(userId, Date.now());
+  const candidate = await findCandidate(userId);
+  if (!candidate) {
+    return { status: "waiting" };
+  }
 
-  removeWaitingUser(userId);
-  removeWaitingUser(candidate.userId);
+  await removeWaitingUser(userId);
+  await removeWaitingUser(candidate.userId);
   return createMatch(userId, candidate.userId);
 };
 
-export const leave = (userId) => {
-  removeWaitingUser(userId);
-  removeMatch(userId);
+export const leave = async (userId) => {
+  await removeWaitingUser(userId);
+  await removeMatch(userId);
   return { success: true };
 };

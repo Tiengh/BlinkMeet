@@ -19,7 +19,9 @@ export async function sendRequest(senderId, recipientId) {
   }
 
   const recipient = await findRecipient(recipientId);
-  if (!recipient) {throw new BadRequestError("Recipient not found");}
+  if (!recipient) {
+    throw new BadRequestError("Recipient not found");
+  }
 
   const alreadyFriends = recipient.user_friends.some((friendId) => friendId.equals(senderId));
   if (alreadyFriends) {
@@ -27,8 +29,7 @@ export async function sendRequest(senderId, recipientId) {
   }
 
   const existingRequest = await findRequest(senderId, recipientId);
-  const reverseRequest = await findRequest(recipientId, senderId);
-  if (existingRequest || reverseRequest) {
+  if (existingRequest) {
     throw new BadRequestError("A friend request already exists");
   }
 
@@ -37,7 +38,9 @@ export async function sendRequest(senderId, recipientId) {
 
 export async function updateRequest(requestId, currentUserId, action) {
   const request = await findRequestById(requestId);
-  if (!request) {throw new NotFoundError("Friend request not found");}
+  if (!request) {
+    throw new NotFoundError("Friend request not found");
+  }
   if (!request.recipient.equals(currentUserId)) {
     throw new ForbiddenError(`You are not authorized to ${action} this request`);
   }

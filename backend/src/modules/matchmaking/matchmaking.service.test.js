@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import * as repository from "./matchmaking.repository.js";
-import { search, getStatus, leave } from "./matchmaking.service.js";
+import { getStatus, leave, search } from "./matchmaking.service.js";
 
 beforeEach(() => {
   repository.clearAllMatchmakingState();
@@ -15,23 +15,23 @@ test("repository exposes explicit waiting-user storage methods", () => {
   assert.equal(typeof repository.clearAllMatchmakingState, "function");
 });
 
-test("first user waits when no candidate is available", () => {
-  const result = search("user-a");
+test("first user waits when no candidate is available", async () => {
+  const result = await search("user-a");
 
   assert.deepEqual(result, { status: "waiting" });
-  assert.equal(getStatus("user-a").status, "waiting");
+  assert.equal((await getStatus("user-a")).status, "waiting");
 });
 
-test("two waiting users match and share the same callId", () => {
-  search("user-a");
-  const result = search("user-b");
+test("two waiting users match and share the same callId", async () => {
+  await search("user-a");
+  const result = await search("user-b");
 
   assert.equal(result.status, "matched");
   assert.ok(result.callId);
   assert.equal(result.peerId, "user-a");
 
-  const matchForA = getStatus("user-a");
-  const matchForB = getStatus("user-b");
+  const matchForA = await getStatus("user-a");
+  const matchForB = await getStatus("user-b");
 
   assert.equal(matchForA.status, "matched");
   assert.equal(matchForB.status, "matched");
@@ -40,56 +40,67 @@ test("two waiting users match and share the same callId", () => {
   assert.equal(matchForB.peerId, "user-a");
 });
 
-test("active users cannot be reused by a third user", () => {
-  search("user-a");
-  search("user-b");
+test("active users cannot be reused by a third user", async () => {
+  await search("user-a");
+  await search("user-b");
 
-  const result = search("user-c");
+  const result = await search("user-c");
 
   assert.deepEqual(result, { status: "waiting" });
-  assert.equal(getStatus("user-c").status, "waiting");
+  assert.equal((await getStatus("user-c")).status, "waiting");
 });
 
-test("leave removes both waiting and matched state", () => {
-  search("user-a");
-  search("user-b");
+test("leave removes both waiting and matched state", async () => {
+  await search("user-a");
+  await search("user-b");
 
-  leave("user-a");
+  await leave("user-a");
 
-  assert.equal(getStatus("user-a").status, "idle");
-  assert.equal(getStatus("user-b").status, "idle");
+  assert.equal((await getStatus("user-a")).status, "idle");
+  assert.equal((await getStatus("user-b")).status, "idle");
 
-  search("user-c");
-  leave("user-c");
+  await search("user-c");
+  await leave("user-c");
 
-  assert.equal(getStatus("user-c").status, "idle");
+  assert.equal((await getStatus("user-c")).status, "idle");
 });
 
-test("immediate rematch is blocked during cooldown", () => {
-  search("user-a");
-  const firstMatch = search("user-b");
+test("immediate rematch is blocked during cooldown", async () => {
+  await search("user-a");
+  const firstMatch = await search("user-b");
 
-  leave("user-a");
-  const result = search("user-a", "user-b");
+  await leave("user-a");
+  const resultA = await search("user-a", "user-b");
+  const resultB = await search("user-b", "user-a");
 
   assert.equal(firstMatch.status, "matched");
-  assert.equal(result.status, "waiting");
-  assert.equal(getStatus("user-a").status, "waiting");
+  assert.equal(resultA.status, "waiting");
+  assert.equal(resultB.status, "waiting");
+  assert.equal((await getStatus("user-a")).status, "waiting");
+  assert.equal((await getStatus("user-b")).status, "waiting");
 });
 
-test("waiting TTL cleanup removes stale user entries", () => {
-  repository.saveWaitingUser("user-a", { userId: "user-a", lastSeen: Date.now() - 31_000 });
+test("waiting TTL cleanup removes stale user entries", async () => {
+  repository.saveWaitingUser("user-a", {
+    userId: "user-a",
+    lastSeen: Date.now() - 31_000,
+  });
 
-  getStatus("user-a");
+  await getStatus("user-a");
 
-  assert.equal(getStatus("user-a").status, "idle");
+  assert.equal((await getStatus("user-a")).status, "idle");
 });
 
-test("status refresh updates waiting user timestamp without dropping it", () => {
-  search("user-a");
+test("status refresh updates waiting user timestamp without dropping it", async () => {
+  repository.saveWaitingUser("user-a", {
+    userId: "user-a",
+    lastSeen: 1,
+  });
 
-  const status = getStatus("user-a");
+  const status = await getStatus("user-a");
+  const refreshedUser = repository.getWaitingUser("user-a");
 
   assert.equal(status.status, "waiting");
-  assert.equal(repository.getWaitingUser("user-a")?.userId, "user-a");
+  assert.equal(refreshedUser?.userId, "user-a");
+  assert.ok(refreshedUser.lastSeen > 1);
 });
