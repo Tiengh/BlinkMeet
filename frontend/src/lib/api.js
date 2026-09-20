@@ -74,28 +74,40 @@ export const getStreamToken = async () => {
 
 export const startRandomSearch = async (
   excludeUserId = null,
+  sessionId,
 ) => {
   const response = await axiosInstance.post(
     "/omegle/search",
     {
       excludeUserId,
+      sessionId,
     },
   );
 
   return response.data;
 };
 
-export const getRandomMatchStatus = async () => {
+export const getRandomMatchStatus = async (sessionId) => {
   const response = await axiosInstance.get(
     "/omegle/status",
+    {
+      params: { sessionId },
+    },
   );
 
   return response.data;
 };
 
-export const leaveRandomMatch = async () => {
+export const leaveRandomMatch = async (
+  sessionId,
+  callId = null,
+) => {
   const response = await axiosInstance.post(
     "/omegle/leave",
+    {
+      sessionId,
+      callId,
+    },
   );
 
   return response.data;

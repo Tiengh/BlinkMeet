@@ -33,6 +33,13 @@ const POLLING_INTERVAL = 1000;
 const SFU_RETRY_DELAY = 1500;
 const MAX_JOIN_RETRIES = 1;
 
+const createSessionId = () => {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+};
+
 const useRandomCall = ({
   authUser,
   onLeave,
@@ -45,11 +52,13 @@ const useRandomCall = ({
   const currentCallRef = useRef(null);
   const currentPeerIdRef = useRef(null);
   const previousPeerIdRef = useRef(null);
+  const activeSessionIdRef = useRef(createSessionId());
 
   const joiningRef = useRef(false);
   const transitioningRef = useRef(false);
   const leavingPageRef = useRef(false);
   const leftCallsRef = useRef(new WeakSet());
+  const leavingCallsRef = useRef(new WeakMap());
 
   const retryTimerRef = useRef(null);
   const searchAttemptRef = useRef(0);
@@ -67,25 +76,43 @@ const useRandomCall = ({
       return;
     }
 
-    leftCallsRef.current.add(targetCall);
-    const startedAt = performance.now();
-    logRandomCall("stream-leave-start", { callId: targetCall.id });
-
-    try {
-      await targetCall.leave();
-      logRandomCall("stream-leave-success", {
-        callId: targetCall.id,
-        elapsedMs: Math.round(performance.now() - startedAt),
-      });
-    } catch (error) {
-      logRandomCall("stream-leave-error", {
-        callId: targetCall.id,
-        ...describeRandomCallError(error),
-      });
-      if (!String(error?.message).includes("already been left")) {
-        console.warn("Failed to leave random call:", describeRandomCallError(error));
-      }
+    const existingLeave = leavingCallsRef.current.get(targetCall);
+    if (existingLeave) {
+      return existingLeave;
     }
+
+    const leavePromise = (async () => {
+      const startedAt = performance.now();
+      logRandomCall("stream-leave-start", { callId: targetCall.id });
+
+      try {
+        await targetCall.leave();
+        leftCallsRef.current.add(targetCall);
+        logRandomCall("stream-leave-success", {
+          callId: targetCall.id,
+          elapsedMs: Math.round(performance.now() - startedAt),
+        });
+      } catch (error) {
+        if (String(error?.message).includes("already been left")) {
+          leftCallsRef.current.add(targetCall);
+          logRandomCall("stream-leave-already-left", {
+            callId: targetCall.id,
+          });
+          return;
+        }
+
+        logRandomCall("stream-leave-error", {
+          callId: targetCall.id,
+          ...describeRandomCallError(error),
+        });
+        throw error;
+      } finally {
+        leavingCallsRef.current.delete(targetCall);
+      }
+    })();
+
+    leavingCallsRef.current.set(targetCall, leavePromise);
+    return leavePromise;
   }, []);
 
   useEffect(() => {
@@ -134,26 +161,52 @@ const useRandomCall = ({
     tokenData?.token,
   ]);
 
-  const cleanupCurrentCall = useCallback(async () => {
-    const activeCall = currentCallRef.current;
-    logRandomCall("cleanup-start", { callId: activeCall?.id ?? null });
+  const cleanupCurrentCall = useCallback(async ({
+    targetCall = currentCallRef.current,
+    sessionId = activeSessionIdRef.current,
+    expectedCallId = targetCall?.id ?? null,
+  } = {}) => {
+    logRandomCall("cleanup-start", {
+      callId: expectedCallId,
+      sessionId,
+    });
 
-    currentCallRef.current = null;
-    currentPeerIdRef.current = null;
+    await leaveCallSafely(targetCall);
 
-    setCall(null);
+    if (!targetCall || currentCallRef.current === targetCall) {
+      setCall(null);
+    }
 
-    await leaveCallSafely(activeCall);
-
+    let leaveResult;
     try {
-      await leaveRandomMatch();
-      logRandomCall("match-leave-success", { callId: activeCall?.id ?? null });
+      leaveResult = await leaveRandomMatch(sessionId, expectedCallId);
     } catch (error) {
       logRandomCall("match-leave-error", {
-        callId: activeCall?.id ?? null,
+        callId: expectedCallId,
+        sessionId,
         ...describeRandomCallError(error),
       });
-      console.error("Failed to leave matchmaking:", describeRandomCallError(error));
+      throw error;
+    }
+
+    if (!leaveResult?.success) {
+      const error = new Error("Matchmaking cleanup was rejected as stale");
+      logRandomCall("match-leave-stale", {
+        callId: expectedCallId,
+        sessionId,
+      });
+      throw error;
+    }
+
+    logRandomCall("match-leave-success", {
+      callId: expectedCallId,
+      sessionId,
+    });
+
+    if (!currentCallRef.current || currentCallRef.current === targetCall) {
+      currentCallRef.current = null;
+      currentPeerIdRef.current = null;
+      setCall(null);
     }
   }, [leaveCallSafely]);
 
@@ -162,17 +215,28 @@ const useRandomCall = ({
       peerId = null,
       delay = 0,
     } = {}) => {
+      const sessionId = activeSessionIdRef.current;
+      const activeCall = currentCallRef.current;
+      const expectedCallId = activeCall?.id ?? null;
+
       logRandomCall("restart-search", {
-        callId: currentCallRef.current?.id ?? null,
+        callId: expectedCallId,
+        sessionId,
         delayMs: delay,
         joining: joiningRef.current,
       });
+
       if (peerId) {
         previousPeerIdRef.current = String(peerId);
       }
 
-      await cleanupCurrentCall();
+      await cleanupCurrentCall({
+        targetCall: activeCall,
+        sessionId,
+        expectedCallId,
+      });
 
+      activeSessionIdRef.current = createSessionId();
       setPhase("searching");
 
       if (retryTimerRef.current) {
@@ -180,7 +244,9 @@ const useRandomCall = ({
       }
 
       retryTimerRef.current = setTimeout(() => {
-        logRandomCall("restart-search-fired");
+        logRandomCall("restart-search-fired", {
+          sessionId: activeSessionIdRef.current,
+        });
         setSearchVersion((version) => version + 1);
       }, delay);
     },
@@ -197,6 +263,54 @@ const useRandomCall = ({
     let pollCount = 0;
     let lastStatus = null;
     let searchAttempt = 0;
+    const sessionId = activeSessionIdRef.current;
+
+    const handleInactiveSession = (statusData) => {
+      if (statusData.status === "session-conflict") {
+        logRandomCall("session-conflict", { sessionId });
+        setPhase("error");
+        toast.error("Random call is already active in another tab.");
+        return true;
+      }
+
+      if (statusData.status === "cancelled") {
+        logRandomCall("session-cancelled", { sessionId });
+        if (!transitioningRef.current) {
+          setPhase("error");
+        }
+        return true;
+      }
+
+      return false;
+    };
+
+    const cleanupFailedJoin = async (targetCall, matchData) => {
+      let streamLeaveError = null;
+
+      try {
+        await leaveCallSafely(targetCall);
+      } catch (error) {
+        streamLeaveError = error;
+      }
+
+      const leaveResult = await leaveRandomMatch(sessionId, matchData.callId);
+      if (!leaveResult?.success) {
+        throw new Error("Failed call cleanup was rejected as stale");
+      }
+
+      if (currentCallRef.current === targetCall) {
+        currentCallRef.current = null;
+        currentPeerIdRef.current = null;
+      }
+      setCall(null);
+
+      if (streamLeaveError) {
+        logRandomCall("failed-join-stream-cleanup-error", {
+          callId: matchData.callId,
+          ...describeRandomCallError(streamLeaveError),
+        });
+      }
+    };
 
     const joinMatchedCall = async (matchData) => {
       if (
@@ -225,13 +339,13 @@ const useRandomCall = ({
       const joinAttempt = ++joinAttemptRef.current;
       const startedAt = performance.now();
       let stage = "prepare";
-
       let nextCall = null;
 
       try {
         setPhase("joining");
         logRandomCall("join-start", {
           callId: matchData.callId,
+          sessionId,
           joinAttempt,
           searchAttempt,
           maxJoinRetries: MAX_JOIN_RETRIES,
@@ -298,30 +412,31 @@ const useRandomCall = ({
           ...describeRandomCallError(error),
         });
         console.error("Failed to join random call:", describeRandomCallError(error));
+
         if (
           cancelled ||
           leavingPageRef.current
         ) {
+          if (nextCall) {
+            leaveCallSafely(nextCall).catch(() => {});
+          }
           return;
         }
 
-        if (nextCall) {
-          await leaveCallSafely(nextCall);
+        try {
+          await cleanupFailedJoin(nextCall, matchData);
+        } catch (cleanupError) {
+          logRandomCall("failed-join-cleanup-error", {
+            callId: matchData.callId,
+            ...describeRandomCallError(cleanupError),
+          });
+          setPhase("error");
+          toast.error("Could not clean up the failed random call.");
+          return;
         }
 
-        currentCallRef.current = null;
-        currentPeerIdRef.current = null;
-
-        setCall(null);
-
-        try {
-          await leaveRandomMatch();
-          logRandomCall("match-leave-success", { callId: matchData.callId });
-        } catch (leaveError) {
-          logRandomCall("match-leave-error", {
-            callId: matchData.callId,
-            ...describeRandomCallError(leaveError),
-          });
+        if (matchData.peerId) {
+          previousPeerIdRef.current = String(matchData.peerId);
         }
 
         if (isSfuConnectionError(error)) {
@@ -329,6 +444,7 @@ const useRandomCall = ({
             "Video server connection failed. Retrying...",
           );
 
+          activeSessionIdRef.current = createSessionId();
           setPhase("searching");
 
           logRandomCall("retry-search-scheduled", {
@@ -344,10 +460,7 @@ const useRandomCall = ({
         }
 
         setPhase("error");
-
-        toast.error(
-          "Could not join the random call.",
-        );
+        toast.error("Could not join the random call.");
       } finally {
         joiningRef.current = false;
         logRandomCall("join-finished", {
@@ -369,7 +482,7 @@ const useRandomCall = ({
       try {
         pollCount += 1;
         const startedAt = performance.now();
-        const statusData = await getRandomMatchStatus();
+        const statusData = await getRandomMatchStatus(sessionId);
 
         if (
           cancelled ||
@@ -388,6 +501,10 @@ const useRandomCall = ({
           });
         }
         lastStatus = statusData.status;
+
+        if (handleInactiveSession(statusData)) {
+          return;
+        }
 
         if (statusData.status === "matched") {
           await joinMatchedCall(statusData);
@@ -428,16 +545,18 @@ const useRandomCall = ({
 
         setCall(null);
         setPhase("searching");
-        searchAttempt = ++searchAttemptRef.current;
+        searchAttempt = ++searchAttempRef.current;
         logRandomCall("search-start", {
           searchAttempt,
           searchVersion,
+          sessionId,
           hasPreviousPeer: Boolean(previousPeerIdRef.current),
         });
 
         const startedAt = performance.now();
         const searchData = await startRandomSearch(
           previousPeerIdRef.current,
+          sessionId,
         );
 
         if (
@@ -453,6 +572,11 @@ const useRandomCall = ({
           callId: searchData.callId ?? null,
           elapsedMs: Math.round(performance.now() - startedAt),
         });
+
+        if (handleInactiveSession(searchData)) {
+          return;
+        }
+
         if (searchData.status === "matched") {
           await joinMatchedCall(searchData);
           return;
@@ -477,10 +601,7 @@ const useRandomCall = ({
         console.error("Random search failed:", describeRandomCallError(error));
 
         setPhase("error");
-
-        toast.error(
-          "Could not search for a stranger.",
-        );
+        toast.error("Could not search for a stranger.");
       }
     };
 
@@ -491,6 +612,7 @@ const useRandomCall = ({
       logRandomCall("search-effect-cleanup", {
         searchAttempt,
         searchVersion,
+        sessionId,
         pollCount,
         joining: joiningRef.current,
       });
@@ -507,10 +629,12 @@ const useRandomCall = ({
 
   const handleNext = useCallback(
     async (peerId) => {
+      const excludedPeerId = peerId || currentPeerIdRef.current;
       logRandomCall("next-click", {
         callId: currentCallRef.current?.id ?? null,
         joining: joiningRef.current,
         transitioning: transitioningRef.current,
+        hasExcludedPeer: Boolean(excludedPeerId),
       });
       if (
         transitioningRef.current ||
@@ -523,8 +647,14 @@ const useRandomCall = ({
 
       try {
         await restartSearch({
-          peerId,
+          peerId: excludedPeerId,
         });
+      } catch (error) {
+        logRandomCall("next-error", {
+          ...describeRandomCallError(error),
+        });
+        setPhase("error");
+        toast.error("Could not leave the current call. Try again.");
       } finally {
         transitioningRef.current = false;
       }
@@ -553,8 +683,13 @@ const useRandomCall = ({
 
       try {
         await cleanupCurrentCall();
-
         setPhase("peer-left");
+      } catch (error) {
+        logRandomCall("peer-left-cleanup-error", {
+          ...describeRandomCallError(error),
+        });
+        setPhase("error");
+        toast.error("Could not clean up the disconnected call.");
       } finally {
         transitioningRef.current = false;
       }
@@ -586,16 +721,25 @@ const useRandomCall = ({
       await restartSearch({
         peerId,
       });
+    } catch (error) {
+      logRandomCall("peer-timeout-cleanup-error", {
+        ...describeRandomCallError(error),
+      });
+      setPhase("error");
+      toast.error("Could not restart matchmaking. Try again.");
     } finally {
       transitioningRef.current = false;
     }
   }, [restartSearch]);
 
-  const handleFindNext = useCallback(() => {
+  const handleFindNext = useCallback(async () => {
     logRandomCall("find-next-click", {
       hasTokenError: isTokenError,
     });
-    if (leavingPageRef.current) {
+    if (
+      leavingPageRef.current ||
+      transitioningRef.current
+    ) {
       return;
     }
 
@@ -604,69 +748,64 @@ const useRandomCall = ({
       return;
     }
 
-    setPhase("searching");
-
-    setSearchVersion((version) => version + 1);
-  }, [isTokenError, refetchToken]);
-
-  const handleLeaveCall = useCallback(
-    async (error) => {
-      logRandomCall("leave-page-click", {
-        callId: currentCallRef.current?.id ?? null,
-        hasError: Boolean(error),
+    transitioningRef.current = true;
+    try {
+      await restartSearch({
+        peerId: previousPeerIdRef.current,
       });
-      if (leavingPageRef.current) {
-        return;
-      }
+    } catch (error) {
+      logRandomCall("find-next-error", {
+        ...describeRandomCallError(error),
+      });
+      setPhase("error");
+      toast.error("Could not restart matchmaking. Try again.");
+    } finally {
+      transitioningRef.current = false;
+    }
+  }, [isTokenError, refetchToken, restartSearch]);
 
-      leavingPageRef.current = true;
+  const handleLeaveCall = useCallback(async () => {
+    logRandomCall("leave-page-click", {
+      callId: currentCallRef.current?.id ?? null,
+    });
+    if (leavingPageRef.current) {
+      return;
+    }
 
-      if (error) {
-        if (!String(error?.message).includes("already been left")) {
-          logRandomCall("leave-page-error", {
-            ...describeRandomCallError(error),
-          });
-          console.error("Stream leave call error:", describeRandomCallError(error));
-        }
-      }
+    leavingPageRef.current = true;
 
-      if (retryTimerRef.current) {
-        clearTimeout(retryTimerRef.current);
-        retryTimerRef.current = null;
-      }
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
 
-      const activeCall = currentCallRef.current;
-
-      currentCallRef.current = null;
-      currentPeerIdRef.current = null;
-
-      setCall(null);
-
-      await leaveCallSafely(activeCall);
-
-      try {
-        await leaveRandomMatch();
-        logRandomCall("match-leave-success", { callId: activeCall?.id ?? null });
-      } catch (leaveError) {
-        logRandomCall("match-leave-error", {
-          callId: activeCall?.id ?? null,
-          ...describeRandomCallError(leaveError),
-        });
-        console.error("Failed to clear matchmaking:", describeRandomCallError(leaveError));
-      }
-
+    try {
+      await cleanupCurrentCall();
       onLeave?.();
-    },
-    [leaveCallSafely, onLeave],
-  );
+    } catch (error) {
+      leavingPageRef.current = false;
+      logRandomCall("leave-page-error", {
+        ...describeRandomCallError(error),
+      });
+      console.error("Failed to leave random call:", describeRandomCallError(error));
+      setPhase("error");
+      toast.error("Could not leave the random call. Try again.");
+    }
+  }, [cleanupCurrentCall, onLeave]);
 
   useEffect(() => {
     return () => {
+      const activeCall = currentCallRef.current;
+      const sessionId = activeSessionIdRef.current;
+      const callId = activeCall?.id ?? null;
+
       logRandomCall("page-unmount", {
-        callId: currentCallRef.current?.id ?? null,
+        callId,
+        sessionId,
         joining: joiningRef.current,
         leavingPage: leavingPageRef.current,
       });
+
       if (retryTimerRef.current) {
         clearTimeout(retryTimerRef.current);
       }
@@ -675,16 +814,24 @@ const useRandomCall = ({
         return;
       }
 
-      const activeCall = currentCallRef.current;
-
       if (activeCall) {
-        leaveCallSafely(activeCall);
+        leaveCallSafely(activeCall).catch((error) => {
+          logRandomCall("unmount-stream-leave-error", {
+            callId,
+            ...describeRandomCallError(error),
+          });
+        });
       }
 
-      leaveRandomMatch().then(
-        () => logRandomCall("match-leave-success", { callId: activeCall?.id ?? null }),
+      leaveRandomMatch(sessionId, callId).then(
+        (result) => logRandomCall("match-leave-unmount-result", {
+          callId,
+          sessionId,
+          success: Boolean(result?.success),
+        }),
         (error) => logRandomCall("match-leave-error", {
-          callId: activeCall?.id ?? null,
+          callId,
+          sessionId,
           ...describeRandomCallError(error),
         }),
       );

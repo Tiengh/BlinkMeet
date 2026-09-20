@@ -5,9 +5,9 @@ import {
   getMatch,
   getWaitingUser,
   getWaitingUsers,
+  isSessionCancelled,
   refreshWaitingUser,
   removeMatch,
-  removeWaitingUser,
   saveWaitingUser,
   tryCreateMatch,
 } from "./matchmaking.repository.js";
@@ -17,16 +17,38 @@ const isExcluded = (user, candidate, now) =>
   (candidate.excludeUserId === user.userId && now < candidate.excludeUntil);
 
 const generateCallId = () => `omegle-${randomUUID()}`;
+const normalizeSessionId = (userId, sessionId) =>
+  sessionId || `legacy-${userId}`;
+
+const toPublicMatch = (match) => match ? ({
+  status: "matched",
+  callId: match.callId,
+  peerId: match.peerId,
+}) : null;
+
+const getOwnedMatch = async (userId, sessionId) => {
+  const match = await getMatch(userId);
+  if (!match) {return { match: null, conflict: false };}
+  if (match.sessionId !== sessionId) {
+    return { match: null, conflict: true };
+  }
+  return { match: toPublicMatch(match), conflict: false };
+};
 
 const createMatch = async (userId, candidateId) => {
   const callId = generateCallId();
   return tryCreateMatch(userId, candidateId, callId);
 };
 
-const findMatch = async (userId) => {
+const findMatch = async (userId, sessionId) => {
   const user = await getWaitingUser(userId);
   if (!user) {
-    return getMatch(userId);
+    const ownedMatch = await getOwnedMatch(userId, sessionId);
+    return ownedMatch.match;
+  }
+
+  if (user.sessionId !== sessionId) {
+    return null;
   }
 
   const now = Date.now();
@@ -41,67 +63,136 @@ const findMatch = async (userId) => {
       return match;
     }
 
-    const existingMatch = await getMatch(userId);
-    if (existingMatch) {
-      return existingMatch;
+    const ownedMatch = await getOwnedMatch(userId, sessionId);
+    if (ownedMatch.match) {
+      return ownedMatch.match;
     }
   }
 
   return null;
 };
 
-export const search = async (userId, excludeUserId) => {
+export const search = async (userId, excludeUserId, sessionId) => {
+  sessionId = normalizeSessionId(userId, sessionId);
   await cleanupWaitingUsers();
-  const existingMatch = await getMatch(userId);
-  if (existingMatch) {
-    return existingMatch;
+
+  if (await isSessionCancelled(userId, sessionId)) {
+    return { status: "cancelled" };
+  }
+
+  const existingMatch = await getOwnedMatch(userId, sessionId);
+  if (existingMatch.conflict) {
+    return { status: "session-conflict" };
+  }
+  if (existingMatch.match) {
+    return existingMatch.match;
+  }
+
+  const currentWaitingUser = await getWaitingUser(userId);
+  if (currentWaitingUser && currentWaitingUser.sessionId !== sessionId) {
+    return { status: "session-conflict" };
   }
 
   const now = Date.now();
   const waitingUser = {
     userId,
+    sessionId,
     excludeUserId: excludeUserId ? String(excludeUserId) : null,
     excludeUntil: excludeUserId ? now + REMATCH_COOLDOWN : 0,
     lastSeen: now,
   };
 
-  await saveWaitingUser(userId, waitingUser);
+  const saved = await saveWaitingUser(userId, waitingUser);
+  if (saved.status === "cancelled" || saved.status === "session-conflict") {
+    return { status: saved.status };
+  }
+  if (saved.status === "matched") {
+    const concurrentMatch = await getOwnedMatch(userId, sessionId);
+    if (concurrentMatch.conflict) {
+      return { status: "session-conflict" };
+    }
+    if (concurrentMatch.match) {
+      return concurrentMatch.match;
+    }
+  }
 
-  const match = await findMatch(userId);
+  const match = await findMatch(userId, sessionId);
   if (!match) {
-    const concurrentMatch = await getMatch(userId);
-    if (concurrentMatch) {return concurrentMatch;}
+    const concurrentMatch = await getOwnedMatch(userId, sessionId);
+    if (concurrentMatch.conflict) {
+      return { status: "session-conflict" };
+    }
+    if (concurrentMatch.match) {
+      return concurrentMatch.match;
+    }
+    if (await isSessionCancelled(userId, sessionId)) {
+      return { status: "cancelled" };
+    }
     return { status: "waiting" };
   }
 
   return match;
 };
 
-export const getStatus = async (userId) => {
+export const getStatus = async (userId, sessionId) => {
+  sessionId = normalizeSessionId(userId, sessionId);
   await cleanupWaitingUsers();
-  const existingMatch = await getMatch(userId);
-  if (existingMatch) {
-    return existingMatch;
+
+  if (await isSessionCancelled(userId, sessionId)) {
+    return { status: "cancelled" };
+  }
+
+  const existingMatch = await getOwnedMatch(userId, sessionId);
+  if (existingMatch.conflict) {
+    return { status: "session-conflict" };
+  }
+  if (existingMatch.match) {
+    return existingMatch.match;
   }
 
   const waitingUser = await getWaitingUser(userId);
   if (!waitingUser) {
     return { status: "idle" };
   }
+  if (waitingUser.sessionId !== sessionId) {
+    return { status: "session-conflict" };
+  }
 
-  await refreshWaitingUser(userId, Date.now());
-  const match = await findMatch(userId);
+  const refreshed = await refreshWaitingUser(userId, sessionId, Date.now());
+  if (!refreshed) {
+    const concurrentMatch = await getOwnedMatch(userId, sessionId);
+    if (concurrentMatch.conflict) {
+      return { status: "session-conflict" };
+    }
+    if (concurrentMatch.match) {
+      return concurrentMatch.match;
+    }
+    if (await isSessionCancelled(userId, sessionId)) {
+      return { status: "cancelled" };
+    }
+    return { status: "idle" };
+  }
+
+  const match = await findMatch(userId, sessionId);
   if (!match) {
-    const concurrentMatch = await getMatch(userId);
-    if (concurrentMatch) {return concurrentMatch;}
+    const concurrentMatch = await getOwnedMatch(userId, sessionId);
+    if (concurrentMatch.conflict) {
+      return { status: "session-conflict" };
+    }
+    if (concurrentMatch.match) {
+      return concurrentMatch.match;
+    }
     return { status: "waiting" };
   }
 
   return match;
 };
 
-export const leave = async (userId) => {
-  await removeWaitingUser(userId);
-  await removeMatch(userId);
+export const leave = async (userId, sessionId, expectedCallId = null) => {
+  sessionId = normalizeSessionId(userId, sessionId);
+  const result = await removeMatch(userId, sessionId, expectedCallId);
+  if (result.stale) {
+    return { success: false, stale: true };
+  }
   return { success: true };
 };
