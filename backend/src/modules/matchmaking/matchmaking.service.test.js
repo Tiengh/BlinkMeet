@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
-import { beforeEach, test } from "node:test";
-import { MATCH_TTL } from "./matchmaking.constants.js";
-import * as repository from "./matchmaking.repository.js";
-import { getStatus, leave, search } from "./matchmaking.service.js";
+import { execFile } from "node:child_process";
+import { after, before, beforeEach, test } from "node:test";
+import { promisify } from "node:util";
 
-beforeEach(() => {
-  repository.clearAllMatchmakingState();
-});
+process.env.REDIS_KEY_PREFIX = `blinkmeet:test:${process.pid}`;
+const { connectRedis, getRedisClient } = await import("../../infrastructure/redis/redis.client.js");
+const { redisKeys } = await import("../../infrastructure/redis/redis.keys.js");
+const repository = await import("./matchmaking.repository.js");
+const { getStatus, leave, search } = await import("./matchmaking.service.js");
+const execFileAsync = promisify(execFile);
+
+before(connectRedis);
+after(async () => {await getRedisClient().quit();});
+
+beforeEach(repository.clearAllMatchmakingState);
 
 test("repository exposes explicit waiting-user storage methods", () => {
   assert.equal(typeof repository.saveWaitingUser, "function");
@@ -41,6 +48,25 @@ test("two waiting users match and share the same callId", async () => {
   assert.equal(matchForB.peerId, "user-a");
 });
 
+test("a separate backend process shares the Redis matchmaking queue", async () => {
+  await search("user-a");
+  const script = `
+    import { connectRedis, getRedisClient } from ${JSON.stringify(new URL("../../infrastructure/redis/redis.client.js", import.meta.url).href)};
+    import { search } from ${JSON.stringify(new URL("./matchmaking.service.js", import.meta.url).href)};
+    await connectRedis();
+    console.log(JSON.stringify(await search("user-b")));
+    await getRedisClient().quit();
+  `;
+  const { stdout } = await execFileAsync(process.execPath,
+    ["--input-type=module", "-e", script], { env: process.env });
+
+  const matchForB = JSON.parse(stdout.trim());
+  const matchForA = await getStatus("user-a");
+  assert.equal(matchForB.peerId, "user-a");
+  assert.equal(matchForA.peerId, "user-b");
+  assert.equal(matchForA.callId, matchForB.callId);
+});
+
 test("active users cannot be reused by a third user", async () => {
   await search("user-a");
   await search("user-b");
@@ -54,7 +80,7 @@ test("active users cannot be reused by a third user", async () => {
 test("repeated searches keep a single waiting entry", async () => {
   const firstResult = await search("user-a");
   const secondResult = await search("user-a");
-  const waitingUsers = repository.getWaitingUsers();
+  const waitingUsers = await repository.getWaitingUsers();
 
   assert.deepEqual(firstResult, { status: "waiting" });
   assert.deepEqual(secondResult, { status: "waiting" });
@@ -71,7 +97,7 @@ test("repeated search returns the existing match without corrupting it", async (
   assert.deepEqual(repeatedMatch, originalMatch);
   assert.equal(peerMatch.callId, originalMatch.callId);
   assert.equal(peerMatch.peerId, "user-b");
-  assert.equal(repository.getWaitingUser("user-b"), undefined);
+  assert.equal(await repository.getWaitingUser("user-b"), undefined);
 });
 
 test("concurrent repeated searches do not requeue a matched user", async () => {
@@ -90,15 +116,15 @@ test("concurrent repeated searches do not requeue a matched user", async () => {
   assert.equal(matchA.peerId, "user-b");
   assert.equal(matchB.peerId, "user-a");
   assert.equal(matchA.callId, matchB.callId);
-  assert.equal(repository.getWaitingUser("user-a"), undefined);
-  assert.equal(repository.getWaitingUser("user-b"), undefined);
+  assert.equal(await repository.getWaitingUser("user-a"), undefined);
+  assert.equal(await repository.getWaitingUser("user-b"), undefined);
 });
 
 test("a waiting user can leave and search again normally", async () => {
   await search("user-a");
   await leave("user-a");
 
-  assert.equal(repository.getWaitingUser("user-a"), undefined);
+  assert.equal(await repository.getWaitingUser("user-a"), undefined);
   assert.deepEqual(await getStatus("user-a"), { status: "idle" });
 
   await search("user-b");
@@ -116,8 +142,8 @@ test("leaving a match removes the symmetric state for both users", async () => {
 
   assert.equal((await getStatus("user-a")).status, "idle");
   assert.equal((await getStatus("user-b")).status, "idle");
-  assert.equal(repository.getMatch("user-a"), undefined);
-  assert.equal(repository.getMatch("user-b"), undefined);
+  assert.equal(await repository.getMatch("user-a"), undefined);
+  assert.equal(await repository.getMatch("user-b"), undefined);
 });
 
 test("concurrent searches preserve one-to-one matching", async () => {
@@ -152,6 +178,25 @@ test("concurrent searches preserve one-to-one matching", async () => {
   assert.equal(peerMatch.callId, match.callId);
 });
 
+test("concurrent claims cannot assign the same candidate twice", async () => {
+  const now = Date.now();
+  await Promise.all(["user-a", "user-b", "user-c"].map((userId) =>
+    repository.saveWaitingUser(userId, {
+      userId, excludeUserId: null, excludeUntil: 0, lastSeen: now,
+    })));
+
+  const claims = await Promise.all([
+    repository.tryCreateMatch("user-a", "user-b", "call-ab"),
+    repository.tryCreateMatch("user-c", "user-b", "call-cb"),
+  ]);
+
+  assert.equal(claims.filter(Boolean).length, 1);
+  const b = await repository.getMatch("user-b");
+  const peer = await repository.getMatch(b.peerId);
+  assert.equal(peer.peerId, "user-b");
+  assert.equal(peer.callId, b.callId);
+});
+
 test("immediate rematch is blocked during cooldown", async () => {
   await search("user-a");
   const firstMatch = await search("user-b");
@@ -173,12 +218,12 @@ test("an excluded candidate is not selected", async () => {
 
   assert.deepEqual(resultA, { status: "waiting" });
   assert.deepEqual(resultB, { status: "waiting" });
-  assert.equal(repository.getMatch("user-a"), undefined);
-  assert.equal(repository.getMatch("user-b"), undefined);
+  assert.equal(await repository.getMatch("user-a"), undefined);
+  assert.equal(await repository.getMatch("user-b"), undefined);
 });
 
 test("waiting TTL cleanup removes stale user entries", async () => {
-  repository.saveWaitingUser("user-a", {
+  await repository.saveWaitingUser("user-a", {
     userId: "user-a",
     lastSeen: Date.now() - 31_000,
   });
@@ -190,31 +235,30 @@ test("waiting TTL cleanup removes stale user entries", async () => {
 
 test("status refresh updates a live waiting user's timestamp", async () => {
   const lastSeen = Date.now() - 1_000;
-  repository.saveWaitingUser("user-a", {
+  await repository.saveWaitingUser("user-a", {
     userId: "user-a",
     lastSeen,
   });
 
   const status = await getStatus("user-a");
-  const refreshedUser = repository.getWaitingUser("user-a");
+  const refreshedUser = await repository.getWaitingUser("user-a");
 
   assert.equal(status.status, "waiting");
   assert.equal(refreshedUser?.userId, "user-a");
   assert.ok(refreshedUser.lastSeen > lastSeen);
 });
 
-test("expired matches are removed symmetrically", async (t) => {
-  let now = Date.now();
-  t.mock.method(Date, "now", () => now);
-
+test("expired matches are removed symmetrically", async () => {
   await search("user-a");
   await search("user-b");
   assert.equal((await getStatus("user-a")).status, "matched");
-
-  now += MATCH_TTL + 1;
+  const redis = getRedisClient();
+  await redis.pExpire(redisKeys.match("user-a"), 1);
+  await redis.pExpire(redisKeys.match("user-b"), 1);
+  await new Promise((resolve) => setTimeout(resolve, 20));
 
   assert.deepEqual(await getStatus("user-a"), { status: "idle" });
   assert.deepEqual(await getStatus("user-b"), { status: "idle" });
-  assert.equal(repository.getMatch("user-a"), undefined);
-  assert.equal(repository.getMatch("user-b"), undefined);
+  assert.equal(await repository.getMatch("user-a"), undefined);
+  assert.equal(await repository.getMatch("user-b"), undefined);
 });

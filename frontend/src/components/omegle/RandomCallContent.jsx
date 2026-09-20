@@ -8,6 +8,7 @@ import {
   hasScreenShare,
   ParticipantView,
   StreamTheme,
+  useCall,
   useCallStateHooks,
 } from "@stream-io/video-react-sdk";
 
@@ -31,6 +32,7 @@ import {
   getUserFriends,
   sendFriendRequest,
 } from "../../lib/api";
+import { logRandomCall } from "../../lib/randomCallDebug";
 
 const PEER_JOIN_TIMEOUT = 12000;
 
@@ -40,6 +42,8 @@ const RandomCallContent = ({
   onPeerJoinTimeout,
   onLeaveCall,
 }) => {
+  const activeCall = useCall();
+  const callId = activeCall?.id ?? null;
   const {
     useLocalParticipant,
     useRemoteParticipants,
@@ -75,6 +79,9 @@ const RandomCallContent = ({
       return;
     }
 
+    if (!hadRemoteParticipantRef.current) {
+      logRandomCall("peer-visible", { callId });
+    }
     hadRemoteParticipantRef.current = true;
     peerJoinTimeoutHandledRef.current = false;
 
@@ -83,7 +90,7 @@ const RandomCallContent = ({
     );
 
     peerLeftHandledRef.current = false;
-  }, [remoteParticipant]);
+  }, [callId, remoteParticipant]);
 
   useEffect(() => {
     if (remoteParticipant) {
@@ -98,6 +105,11 @@ const RandomCallContent = ({
       return;
     }
 
+    const startedAt = performance.now();
+    logRandomCall("peer-wait-start", {
+      callId,
+      timeoutMs: PEER_JOIN_TIMEOUT,
+    });
     const timer = setTimeout(() => {
       if (
         hadRemoteParticipantRef.current ||
@@ -107,14 +119,24 @@ const RandomCallContent = ({
       }
 
       peerJoinTimeoutHandledRef.current = true;
+      logRandomCall("peer-wait-timeout", {
+        callId,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
 
       onPeerJoinTimeout();
     }, PEER_JOIN_TIMEOUT);
 
     return () => {
       clearTimeout(timer);
+      logRandomCall("peer-wait-end", {
+        callId,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        peerVisible: hadRemoteParticipantRef.current,
+      });
     };
   }, [
+    callId,
     remoteParticipant,
     onPeerJoinTimeout,
   ]);
@@ -129,11 +151,13 @@ const RandomCallContent = ({
     }
 
     peerLeftHandledRef.current = true;
+    logRandomCall("peer-left-detected", { callId });
 
     onPeerLeft(
       lastRemoteUserIdRef.current,
     );
   }, [
+    callId,
     remoteParticipants.length,
     onPeerLeft,
   ]);

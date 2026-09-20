@@ -69,6 +69,8 @@ export const search = async (userId, excludeUserId) => {
 
   const match = await findMatch(userId);
   if (!match) {
+    const concurrentMatch = await getMatch(userId);
+    if (concurrentMatch) {return concurrentMatch;}
     return { status: "waiting" };
   }
 
@@ -90,6 +92,8 @@ export const getStatus = async (userId) => {
   await refreshWaitingUser(userId, Date.now());
   const match = await findMatch(userId);
   if (!match) {
+    const concurrentMatch = await getMatch(userId);
+    if (concurrentMatch) {return concurrentMatch;}
     return { status: "waiting" };
   }
 
