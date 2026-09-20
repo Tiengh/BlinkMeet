@@ -545,7 +545,7 @@ const useRandomCall = ({
 
         setCall(null);
         setPhase("searching");
-        searchAttempt = ++searchAttempRef.current;
+        searchAttempt = ++searchAttemptRef.current;
         logRandomCall("search-start", {
           searchAttempt,
           searchVersion,
