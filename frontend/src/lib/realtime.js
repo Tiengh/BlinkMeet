@@ -6,7 +6,7 @@ const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || API_URL.replace(/\/api\/?$
 export const createRealtimeSocket = () => io(SOCKET_URL, {
   autoConnect: false,
   withCredentials: true,
-  transports: ["websocket", "polling"],
+  transports: ["websocket"],
   reconnection: true,
 });
 
