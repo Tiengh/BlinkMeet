@@ -7,7 +7,7 @@ process.env.REDIS_KEY_PREFIX = `blinkmeet:test:${process.pid}`;
 const { connectRedis, getRedisClient } = await import("../../infrastructure/redis/redis.client.js");
 const { redisKeys } = await import("../../infrastructure/redis/redis.keys.js");
 const repository = await import("./matchmaking.repository.js");
-const { getStatus, leave, search } = await import("./matchmaking.service.js");
+const { getStatus, leave, renewMatch, search } = await import("./matchmaking.service.js");
 const execFileAsync = promisify(execFile);
 
 const session = (userId, suffix = "main") => `${userId}-${suffix}-session`;
@@ -257,6 +257,17 @@ test("expired matches are removed by Redis TTL", async () => {
   assert.deepEqual(await statusUser("user-b"), { status: "idle" });
   assert.equal(await repository.getMatch("user-a"), undefined);
   assert.equal(await repository.getMatch("user-b"), undefined);
+});
+
+test("an active match lease can be renewed symmetrically", async () => {
+  await searchUser("user-a");
+  const match = await searchUser("user-b");
+  const redis = getRedisClient();
+  await redis.pExpire(redisKeys.match("user-a"), 1_000);
+  await redis.pExpire(redisKeys.match("user-b"), 1_000);
+  assert.equal(await renewMatch("user-a", session("user-a"), match.callId), true);
+  assert.ok(await redis.pTTL(redisKeys.match("user-a")) > 60_000);
+  assert.ok(await redis.pTTL(redisKeys.match("user-b")) > 60_000);
 });
 
 test("a cancelled session cannot be resurrected by a delayed search", async () => {
