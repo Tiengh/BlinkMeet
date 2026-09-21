@@ -22,11 +22,23 @@ import {
   enableAvailableMedia,
   isSfuConnectionError,
 } from "../lib/streamVideo";
+import {
+  describeRandomCallError,
+  logRandomCall,
+} from "../lib/randomCallDebug";
 
 const STREAM_API_KEY = import.meta.env.VITE_STREAM_API_KEY;
 
 const POLLING_INTERVAL = 1000;
 const SFU_RETRY_DELAY = 1500;
+const MAX_JOIN_RETRIES = 1;
+
+const createSessionId = () => {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+};
 
 const useRandomCall = ({
   authUser,
@@ -40,13 +52,17 @@ const useRandomCall = ({
   const currentCallRef = useRef(null);
   const currentPeerIdRef = useRef(null);
   const previousPeerIdRef = useRef(null);
+  const activeSessionIdRef = useRef(createSessionId());
 
   const joiningRef = useRef(false);
   const transitioningRef = useRef(false);
   const leavingPageRef = useRef(false);
   const leftCallsRef = useRef(new WeakSet());
+  const leavingCallsRef = useRef(new WeakMap());
 
   const retryTimerRef = useRef(null);
+  const searchAttemptRef = useRef(0);
+  const joinAttemptRef = useRef(0);
 
   const {
     data: tokenData,
@@ -60,15 +76,43 @@ const useRandomCall = ({
       return;
     }
 
-    leftCallsRef.current.add(targetCall);
-
-    try {
-      await targetCall.leave();
-    } catch (error) {
-      if (!String(error?.message).includes("already been left")) {
-        console.error("Failed to leave call:", error);
-      }
+    const existingLeave = leavingCallsRef.current.get(targetCall);
+    if (existingLeave) {
+      return existingLeave;
     }
+
+    const leavePromise = (async () => {
+      const startedAt = performance.now();
+      logRandomCall("stream-leave-start", { callId: targetCall.id });
+
+      try {
+        await targetCall.leave();
+        leftCallsRef.current.add(targetCall);
+        logRandomCall("stream-leave-success", {
+          callId: targetCall.id,
+          elapsedMs: Math.round(performance.now() - startedAt),
+        });
+      } catch (error) {
+        if (String(error?.message).includes("already been left")) {
+          leftCallsRef.current.add(targetCall);
+          logRandomCall("stream-leave-already-left", {
+            callId: targetCall.id,
+          });
+          return;
+        }
+
+        logRandomCall("stream-leave-error", {
+          callId: targetCall.id,
+          ...describeRandomCallError(error),
+        });
+        throw error;
+      } finally {
+        leavingCallsRef.current.delete(targetCall);
+      }
+    })();
+
+    leavingCallsRef.current.set(targetCall, leavePromise);
+    return leavePromise;
   }, []);
 
   useEffect(() => {
@@ -98,10 +142,17 @@ const useRandomCall = ({
       },
     });
 
+    logRandomCall("video-client-created");
     setVideoClient(client);
 
     return () => {
-      client.disconnectUser().catch(console.error);
+      logRandomCall("video-client-disconnect-start");
+      client.disconnectUser().then(
+        () => logRandomCall("video-client-disconnect-success"),
+        (error) => logRandomCall("video-client-disconnect-error", {
+          ...describeRandomCallError(error),
+        }),
+      );
     };
   }, [
     authUser?._id,
@@ -110,23 +161,52 @@ const useRandomCall = ({
     tokenData?.token,
   ]);
 
-  const cleanupCurrentCall = useCallback(async () => {
-    const activeCall = currentCallRef.current;
+  const cleanupCurrentCall = useCallback(async ({
+    targetCall = currentCallRef.current,
+    sessionId = activeSessionIdRef.current,
+    expectedCallId = targetCall?.id ?? null,
+  } = {}) => {
+    logRandomCall("cleanup-start", {
+      callId: expectedCallId,
+      sessionId,
+    });
 
-    currentCallRef.current = null;
-    currentPeerIdRef.current = null;
+    await leaveCallSafely(targetCall);
 
-    setCall(null);
+    if (!targetCall || currentCallRef.current === targetCall) {
+      setCall(null);
+    }
 
-    await leaveCallSafely(activeCall);
-
+    let leaveResult;
     try {
-      await leaveRandomMatch();
+      leaveResult = await leaveRandomMatch(sessionId, expectedCallId);
     } catch (error) {
-      console.error(
-        "Failed to leave matchmaking:",
-        error,
-      );
+      logRandomCall("match-leave-error", {
+        callId: expectedCallId,
+        sessionId,
+        ...describeRandomCallError(error),
+      });
+      throw error;
+    }
+
+    if (!leaveResult?.success) {
+      const error = new Error("Matchmaking cleanup was rejected as stale");
+      logRandomCall("match-leave-stale", {
+        callId: expectedCallId,
+        sessionId,
+      });
+      throw error;
+    }
+
+    logRandomCall("match-leave-success", {
+      callId: expectedCallId,
+      sessionId,
+    });
+
+    if (!currentCallRef.current || currentCallRef.current === targetCall) {
+      currentCallRef.current = null;
+      currentPeerIdRef.current = null;
+      setCall(null);
     }
   }, [leaveCallSafely]);
 
@@ -135,12 +215,28 @@ const useRandomCall = ({
       peerId = null,
       delay = 0,
     } = {}) => {
+      const sessionId = activeSessionIdRef.current;
+      const activeCall = currentCallRef.current;
+      const expectedCallId = activeCall?.id ?? null;
+
+      logRandomCall("restart-search", {
+        callId: expectedCallId,
+        sessionId,
+        delayMs: delay,
+        joining: joiningRef.current,
+      });
+
       if (peerId) {
         previousPeerIdRef.current = String(peerId);
       }
 
-      await cleanupCurrentCall();
+      await cleanupCurrentCall({
+        targetCall: activeCall,
+        sessionId,
+        expectedCallId,
+      });
 
+      activeSessionIdRef.current = createSessionId();
       setPhase("searching");
 
       if (retryTimerRef.current) {
@@ -148,6 +244,9 @@ const useRandomCall = ({
       }
 
       retryTimerRef.current = setTimeout(() => {
+        logRandomCall("restart-search-fired", {
+          sessionId: activeSessionIdRef.current,
+        });
         setSearchVersion((version) => version + 1);
       }, delay);
     },
@@ -161,6 +260,57 @@ const useRandomCall = ({
 
     let cancelled = false;
     let pollTimer = null;
+    let pollCount = 0;
+    let lastStatus = null;
+    let searchAttempt = 0;
+    const sessionId = activeSessionIdRef.current;
+
+    const handleInactiveSession = (statusData) => {
+      if (statusData.status === "session-conflict") {
+        logRandomCall("session-conflict", { sessionId });
+        setPhase("error");
+        toast.error("Random call is already active in another tab.");
+        return true;
+      }
+
+      if (statusData.status === "cancelled") {
+        logRandomCall("session-cancelled", { sessionId });
+        if (!transitioningRef.current) {
+          setPhase("error");
+        }
+        return true;
+      }
+
+      return false;
+    };
+
+    const cleanupFailedJoin = async (targetCall, matchData) => {
+      let streamLeaveError = null;
+
+      try {
+        await leaveCallSafely(targetCall);
+      } catch (error) {
+        streamLeaveError = error;
+      }
+
+      const leaveResult = await leaveRandomMatch(sessionId, matchData.callId);
+      if (!leaveResult?.success) {
+        throw new Error("Failed call cleanup was rejected as stale");
+      }
+
+      if (currentCallRef.current === targetCall) {
+        currentCallRef.current = null;
+        currentPeerIdRef.current = null;
+      }
+      setCall(null);
+
+      if (streamLeaveError) {
+        logRandomCall("failed-join-stream-cleanup-error", {
+          callId: matchData.callId,
+          ...describeRandomCallError(streamLeaveError),
+        });
+      }
+    };
 
     const joinMatchedCall = async (matchData) => {
       if (
@@ -168,6 +318,12 @@ const useRandomCall = ({
         joiningRef.current ||
         leavingPageRef.current
       ) {
+        logRandomCall("join-skipped", {
+          callId: matchData?.callId ?? null,
+          cancelled,
+          joining: joiningRef.current,
+          leavingPage: leavingPageRef.current,
+        });
         return;
       }
 
@@ -175,15 +331,25 @@ const useRandomCall = ({
         !matchData?.callId ||
         !matchData?.peerId
       ) {
+        logRandomCall("join-invalid-match");
         return;
       }
 
       joiningRef.current = true;
-
+      const joinAttempt = ++joinAttemptRef.current;
+      const startedAt = performance.now();
+      let stage = "prepare";
       let nextCall = null;
 
       try {
         setPhase("joining");
+        logRandomCall("join-start", {
+          callId: matchData.callId,
+          sessionId,
+          joinAttempt,
+          searchAttempt,
+          maxJoinRetries: MAX_JOIN_RETRIES,
+        });
 
         nextCall = videoClient.call(
           "default",
@@ -195,15 +361,25 @@ const useRandomCall = ({
           nextCall.microphone.disable(),
         ]);
 
+        stage = "stream-join";
         await nextCall.join({
           create: true,
-          maxJoinRetries: 1,
+          maxJoinRetries: MAX_JOIN_RETRIES,
+        });
+        logRandomCall("join-success", {
+          callId: matchData.callId,
+          joinAttempt,
+          elapsedMs: Math.round(performance.now() - startedAt),
         });
 
         if (
           cancelled ||
           leavingPageRef.current
         ) {
+          logRandomCall("join-abandoned", {
+            callId: matchData.callId,
+            joinAttempt,
+          });
           await leaveCallSafely(nextCall);
           return;
         }
@@ -216,39 +392,67 @@ const useRandomCall = ({
         setCall(nextCall);
         setPhase("in-call");
 
+        stage = "enable-media";
+        logRandomCall("media-enable-start", {
+          callId: matchData.callId,
+          joinAttempt,
+        });
         await enableAvailableMedia(nextCall);
+        logRandomCall("media-enable-finished", {
+          callId: matchData.callId,
+          joinAttempt,
+          elapsedMs: Math.round(performance.now() - startedAt),
+        });
       } catch (error) {
+        logRandomCall("call-setup-error", {
+          callId: matchData.callId,
+          joinAttempt,
+          stage,
+          elapsedMs: Math.round(performance.now() - startedAt),
+          ...describeRandomCallError(error),
+        });
+        console.error("Failed to join random call:", describeRandomCallError(error));
+
         if (
           cancelled ||
           leavingPageRef.current
         ) {
+          if (nextCall) {
+            leaveCallSafely(nextCall).catch(() => {});
+          }
           return;
         }
 
-        console.error(
-          "Failed to join random call:",
-          error,
-        );
-
-        if (nextCall) {
-          await leaveCallSafely(nextCall);
+        try {
+          await cleanupFailedJoin(nextCall, matchData);
+        } catch (cleanupError) {
+          logRandomCall("failed-join-cleanup-error", {
+            callId: matchData.callId,
+            ...describeRandomCallError(cleanupError),
+          });
+          setPhase("error");
+          toast.error("Could not clean up the failed random call.");
+          return;
         }
 
-        currentCallRef.current = null;
-        currentPeerIdRef.current = null;
-
-        setCall(null);
-
-        await leaveRandomMatch().catch(console.error);
+        if (matchData.peerId) {
+          previousPeerIdRef.current = String(matchData.peerId);
+        }
 
         if (isSfuConnectionError(error)) {
           toast.error(
             "Video server connection failed. Retrying...",
           );
 
+          activeSessionIdRef.current = createSessionId();
           setPhase("searching");
 
+          logRandomCall("retry-search-scheduled", {
+            callId: matchData.callId,
+            delayMs: SFU_RETRY_DELAY,
+          });
           retryTimerRef.current = setTimeout(() => {
+            logRandomCall("retry-search-fired", { callId: matchData.callId });
             setSearchVersion((version) => version + 1);
           }, SFU_RETRY_DELAY);
 
@@ -256,12 +460,14 @@ const useRandomCall = ({
         }
 
         setPhase("error");
-
-        toast.error(
-          "Could not join the random call.",
-        );
+        toast.error("Could not join the random call.");
       } finally {
         joiningRef.current = false;
+        logRandomCall("join-finished", {
+          callId: matchData.callId,
+          joinAttempt,
+          elapsedMs: Math.round(performance.now() - startedAt),
+        });
       }
     };
 
@@ -274,12 +480,29 @@ const useRandomCall = ({
       }
 
       try {
-        const statusData = await getRandomMatchStatus();
+        pollCount += 1;
+        const startedAt = performance.now();
+        const statusData = await getRandomMatchStatus(sessionId);
 
         if (
           cancelled ||
           leavingPageRef.current
         ) {
+          return;
+        }
+
+        if (statusData.status !== lastStatus || pollCount % 5 === 0) {
+          logRandomCall("status-result", {
+            searchAttempt,
+            pollCount,
+            status: statusData.status,
+            callId: statusData.callId ?? null,
+            elapsedMs: Math.round(performance.now() - startedAt),
+          });
+        }
+        lastStatus = statusData.status;
+
+        if (handleInactiveSession(statusData)) {
           return;
         }
 
@@ -300,10 +523,12 @@ const useRandomCall = ({
           return;
         }
 
-        console.error(
-          "Match status polling failed:",
-          error,
-        );
+        logRandomCall("status-error", {
+          searchAttempt,
+          pollCount,
+          ...describeRandomCallError(error),
+        });
+        console.error("Match status polling failed:", describeRandomCallError(error));
 
         pollTimer = setTimeout(
           pollMatchStatus,
@@ -320,15 +545,35 @@ const useRandomCall = ({
 
         setCall(null);
         setPhase("searching");
+        searchAttempt = ++searchAttemptRef.current;
+        logRandomCall("search-start", {
+          searchAttempt,
+          searchVersion,
+          sessionId,
+          hasPreviousPeer: Boolean(previousPeerIdRef.current),
+        });
 
+        const startedAt = performance.now();
         const searchData = await startRandomSearch(
           previousPeerIdRef.current,
+          sessionId,
         );
 
         if (
           cancelled ||
           leavingPageRef.current
         ) {
+          return;
+        }
+
+        logRandomCall("search-result", {
+          searchAttempt,
+          status: searchData.status,
+          callId: searchData.callId ?? null,
+          elapsedMs: Math.round(performance.now() - startedAt),
+        });
+
+        if (handleInactiveSession(searchData)) {
           return;
         }
 
@@ -349,16 +594,14 @@ const useRandomCall = ({
           return;
         }
 
-        console.error(
-          "Random search failed:",
-          error,
-        );
+        logRandomCall("search-error", {
+          searchAttempt,
+          ...describeRandomCallError(error),
+        });
+        console.error("Random search failed:", describeRandomCallError(error));
 
         setPhase("error");
-
-        toast.error(
-          "Could not search for a stranger.",
-        );
+        toast.error("Could not search for a stranger.");
       }
     };
 
@@ -366,6 +609,13 @@ const useRandomCall = ({
 
     return () => {
       cancelled = true;
+      logRandomCall("search-effect-cleanup", {
+        searchAttempt,
+        searchVersion,
+        sessionId,
+        pollCount,
+        joining: joiningRef.current,
+      });
 
       if (pollTimer) {
         clearTimeout(pollTimer);
@@ -379,6 +629,13 @@ const useRandomCall = ({
 
   const handleNext = useCallback(
     async (peerId) => {
+      const excludedPeerId = peerId || currentPeerIdRef.current;
+      logRandomCall("next-click", {
+        callId: currentCallRef.current?.id ?? null,
+        joining: joiningRef.current,
+        transitioning: transitioningRef.current,
+        hasExcludedPeer: Boolean(excludedPeerId),
+      });
       if (
         transitioningRef.current ||
         leavingPageRef.current
@@ -390,8 +647,14 @@ const useRandomCall = ({
 
       try {
         await restartSearch({
-          peerId,
+          peerId: excludedPeerId,
         });
+      } catch (error) {
+        logRandomCall("next-error", {
+          ...describeRandomCallError(error),
+        });
+        setPhase("error");
+        toast.error("Could not leave the current call. Try again.");
       } finally {
         transitioningRef.current = false;
       }
@@ -401,6 +664,10 @@ const useRandomCall = ({
 
   const handlePeerLeft = useCallback(
     async (peerId) => {
+      logRandomCall("peer-left-callback", {
+        callId: currentCallRef.current?.id ?? null,
+        joining: joiningRef.current,
+      });
       if (
         transitioningRef.current ||
         leavingPageRef.current
@@ -416,8 +683,13 @@ const useRandomCall = ({
 
       try {
         await cleanupCurrentCall();
-
         setPhase("peer-left");
+      } catch (error) {
+        logRandomCall("peer-left-cleanup-error", {
+          ...describeRandomCallError(error),
+        });
+        setPhase("error");
+        toast.error("Could not clean up the disconnected call.");
       } finally {
         transitioningRef.current = false;
       }
@@ -426,6 +698,10 @@ const useRandomCall = ({
   );
 
   const handlePeerJoinTimeout = useCallback(async () => {
+    logRandomCall("peer-timeout-callback", {
+      callId: currentCallRef.current?.id ?? null,
+      joining: joiningRef.current,
+    });
     if (
       transitioningRef.current ||
       leavingPageRef.current
@@ -445,13 +721,25 @@ const useRandomCall = ({
       await restartSearch({
         peerId,
       });
+    } catch (error) {
+      logRandomCall("peer-timeout-cleanup-error", {
+        ...describeRandomCallError(error),
+      });
+      setPhase("error");
+      toast.error("Could not restart matchmaking. Try again.");
     } finally {
       transitioningRef.current = false;
     }
   }, [restartSearch]);
 
-  const handleFindNext = useCallback(() => {
-    if (leavingPageRef.current) {
+  const handleFindNext = useCallback(async () => {
+    logRandomCall("find-next-click", {
+      hasTokenError: isTokenError,
+    });
+    if (
+      leavingPageRef.current ||
+      transitioningRef.current
+    ) {
       return;
     }
 
@@ -460,58 +748,64 @@ const useRandomCall = ({
       return;
     }
 
-    setPhase("searching");
+    transitioningRef.current = true;
+    try {
+      await restartSearch({
+        peerId: previousPeerIdRef.current,
+      });
+    } catch (error) {
+      logRandomCall("find-next-error", {
+        ...describeRandomCallError(error),
+      });
+      setPhase("error");
+      toast.error("Could not restart matchmaking. Try again.");
+    } finally {
+      transitioningRef.current = false;
+    }
+  }, [isTokenError, refetchToken, restartSearch]);
 
-    setSearchVersion((version) => version + 1);
-  }, [isTokenError, refetchToken]);
+  const handleLeaveCall = useCallback(async () => {
+    logRandomCall("leave-page-click", {
+      callId: currentCallRef.current?.id ?? null,
+    });
+    if (leavingPageRef.current) {
+      return;
+    }
 
-  const handleLeaveCall = useCallback(
-    async (error) => {
-      if (leavingPageRef.current) {
-        return;
-      }
+    leavingPageRef.current = true;
 
-      leavingPageRef.current = true;
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
 
-      if (error) {
-        if (!String(error?.message).includes("already been left")) {
-          console.error(
-            "Stream leave call error:",
-            error,
-          );
-        }
-      }
-
-      if (retryTimerRef.current) {
-        clearTimeout(retryTimerRef.current);
-        retryTimerRef.current = null;
-      }
-
-      const activeCall = currentCallRef.current;
-
-      currentCallRef.current = null;
-      currentPeerIdRef.current = null;
-
-      setCall(null);
-
-      await leaveCallSafely(activeCall);
-
-      try {
-        await leaveRandomMatch();
-      } catch (leaveError) {
-        console.error(
-          "Failed to clear matchmaking:",
-          leaveError,
-        );
-      }
-
+    try {
+      await cleanupCurrentCall();
       onLeave?.();
-    },
-    [leaveCallSafely, onLeave],
-  );
+    } catch (error) {
+      leavingPageRef.current = false;
+      logRandomCall("leave-page-error", {
+        ...describeRandomCallError(error),
+      });
+      console.error("Failed to leave random call:", describeRandomCallError(error));
+      setPhase("error");
+      toast.error("Could not leave the random call. Try again.");
+    }
+  }, [cleanupCurrentCall, onLeave]);
 
   useEffect(() => {
     return () => {
+      const activeCall = currentCallRef.current;
+      const sessionId = activeSessionIdRef.current;
+      const callId = activeCall?.id ?? null;
+
+      logRandomCall("page-unmount", {
+        callId,
+        sessionId,
+        joining: joiningRef.current,
+        leavingPage: leavingPageRef.current,
+      });
+
       if (retryTimerRef.current) {
         clearTimeout(retryTimerRef.current);
       }
@@ -520,13 +814,27 @@ const useRandomCall = ({
         return;
       }
 
-      const activeCall = currentCallRef.current;
-
       if (activeCall) {
-        leaveCallSafely(activeCall);
+        leaveCallSafely(activeCall).catch((error) => {
+          logRandomCall("unmount-stream-leave-error", {
+            callId,
+            ...describeRandomCallError(error),
+          });
+        });
       }
 
-      leaveRandomMatch().catch(console.error);
+      leaveRandomMatch(sessionId, callId).then(
+        (result) => logRandomCall("match-leave-unmount-result", {
+          callId,
+          sessionId,
+          success: Boolean(result?.success),
+        }),
+        (error) => logRandomCall("match-leave-error", {
+          callId,
+          sessionId,
+          ...describeRandomCallError(error),
+        }),
+      );
     };
   }, [leaveCallSafely]);
 

@@ -4,10 +4,14 @@ import React, {
 } from "react";
 
 import {
-  CallControls,
   hasScreenShare,
   ParticipantView,
+  ScreenShareButton,
+  SpeakingWhileMutedNotification,
   StreamTheme,
+  ToggleAudioPublishingButton,
+  ToggleVideoPublishingButton,
+  useCall,
   useCallStateHooks,
 } from "@stream-io/video-react-sdk";
 
@@ -22,6 +26,7 @@ import {
   SkipForwardIcon,
   UserPlusIcon,
   UsersIcon,
+  PhoneOffIcon,
 } from "lucide-react";
 
 import toast from "react-hot-toast";
@@ -31,8 +36,10 @@ import {
   getUserFriends,
   sendFriendRequest,
 } from "../../lib/api";
+import { logRandomCall } from "../../lib/randomCallDebug";
 
 const PEER_JOIN_TIMEOUT = 12000;
+const PEER_DISCONNECT_GRACE = 4000;
 
 const RandomCallContent = ({
   onNext,
@@ -40,6 +47,8 @@ const RandomCallContent = ({
   onPeerJoinTimeout,
   onLeaveCall,
 }) => {
+  const activeCall = useCall();
+  const callId = activeCall?.id ?? null;
   const {
     useLocalParticipant,
     useRemoteParticipants,
@@ -75,6 +84,9 @@ const RandomCallContent = ({
       return;
     }
 
+    if (!hadRemoteParticipantRef.current) {
+      logRandomCall("peer-visible", { callId });
+    }
     hadRemoteParticipantRef.current = true;
     peerJoinTimeoutHandledRef.current = false;
 
@@ -83,7 +95,7 @@ const RandomCallContent = ({
     );
 
     peerLeftHandledRef.current = false;
-  }, [remoteParticipant]);
+  }, [callId, remoteParticipant]);
 
   useEffect(() => {
     if (remoteParticipant) {
@@ -98,6 +110,11 @@ const RandomCallContent = ({
       return;
     }
 
+    const startedAt = performance.now();
+    logRandomCall("peer-wait-start", {
+      callId,
+      timeoutMs: PEER_JOIN_TIMEOUT,
+    });
     const timer = setTimeout(() => {
       if (
         hadRemoteParticipantRef.current ||
@@ -107,14 +124,24 @@ const RandomCallContent = ({
       }
 
       peerJoinTimeoutHandledRef.current = true;
+      logRandomCall("peer-wait-timeout", {
+        callId,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
 
       onPeerJoinTimeout();
     }, PEER_JOIN_TIMEOUT);
 
     return () => {
       clearTimeout(timer);
+      logRandomCall("peer-wait-end", {
+        callId,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        peerVisible: hadRemoteParticipantRef.current,
+      });
     };
   }, [
+    callId,
     remoteParticipant,
     onPeerJoinTimeout,
   ]);
@@ -128,12 +155,40 @@ const RandomCallContent = ({
       return;
     }
 
-    peerLeftHandledRef.current = true;
+    const startedAt = performance.now();
+    logRandomCall("peer-disconnect-grace-start", {
+      callId,
+      graceMs: PEER_DISCONNECT_GRACE,
+    });
 
-    onPeerLeft(
-      lastRemoteUserIdRef.current,
-    );
+    const timer = setTimeout(() => {
+      if (
+        remoteParticipants.length > 0 ||
+        peerLeftHandledRef.current
+      ) {
+        return;
+      }
+
+      peerLeftHandledRef.current = true;
+      logRandomCall("peer-left-detected", {
+        callId,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
+
+      onPeerLeft(
+        lastRemoteUserIdRef.current,
+      );
+    }, PEER_DISCONNECT_GRACE);
+
+    return () => {
+      clearTimeout(timer);
+      logRandomCall("peer-disconnect-grace-end", {
+        callId,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
+    };
   }, [
+    callId,
     remoteParticipants.length,
     onPeerLeft,
   ]);
@@ -306,10 +361,20 @@ const RandomCallContent = ({
           </button>
         </div>
 
-        <div className="shrink-0">
-          <CallControls
-            onLeave={onLeaveCall}
-          />
+        <div className="shrink-0 str-video__call-controls">
+          <SpeakingWhileMutedNotification>
+            <ToggleAudioPublishingButton />
+          </SpeakingWhileMutedNotification>
+          <ToggleVideoPublishingButton />
+          <ScreenShareButton />
+          <button
+            type="button"
+            className="str-video__call-controls__button"
+            aria-label="Leave call"
+            onClick={onLeaveCall}
+          >
+            <PhoneOffIcon className="w-5 h-5" />
+          </button>
         </div>
       </div>
     </StreamTheme>
