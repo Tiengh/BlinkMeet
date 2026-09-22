@@ -12,10 +12,13 @@ import {
 import toast from "react-hot-toast";
 
 import {
-  getRandomMatchStatus,
   leaveRandomMatch,
   startRandomSearch,
 } from "../lib/api";
+import {
+  createRealtimeSocket,
+  emitWithAck,
+} from "../lib/realtime";
 import useStreamToken from "./useStreamToken";
 
 import {
@@ -29,8 +32,9 @@ import {
 
 const STREAM_API_KEY = import.meta.env.VITE_STREAM_API_KEY;
 
-const POLLING_INTERVAL = 1000;
 const SFU_RETRY_DELAY = 1500;
+const SOCKET_CONNECT_GRACE = 8000;
+const JOIN_RETRY_DELAY = 100;
 const MAX_JOIN_RETRIES = 1;
 
 const createSessionId = () => {
@@ -54,11 +58,15 @@ const useRandomCall = ({
   const previousPeerIdRef = useRef(null);
   const activeSessionIdRef = useRef(createSessionId());
 
-  const joiningRef = useRef(false);
   const transitioningRef = useRef(false);
   const leavingPageRef = useRef(false);
+  const joiningCallIdRef = useRef(null);
+  const lifecycleRef = useRef(0);
+
   const leftCallsRef = useRef(new WeakSet());
   const leavingCallsRef = useRef(new WeakMap());
+  const socketRef = useRef(null);
+  const serverPeerLeftRef = useRef(null);
 
   const retryTimerRef = useRef(null);
   const searchAttemptRef = useRef(0);
@@ -115,12 +123,27 @@ const useRandomCall = ({
     return leavePromise;
   }, []);
 
+  const cancelMatchmaking = useCallback(async (sessionId, callId) => {
+    const socket = socketRef.current;
+    if (socket?.connected) {
+      try {
+        return await emitWithAck(socket, "matchmaking:cancel", {
+          sessionId,
+          callId,
+        });
+      } catch (error) {
+        logRandomCall("socket-cancel-fallback", {
+          sessionId,
+          callId,
+          ...describeRandomCallError(error),
+        });
+      }
+    }
+    return leaveRandomMatch(sessionId, callId);
+  }, []);
+
   useEffect(() => {
-    if (
-      !authUser?._id ||
-      !tokenData?.token ||
-      !STREAM_API_KEY
-    ) {
+    if (!authUser?._id || !tokenData?.token || !STREAM_API_KEY) {
       return;
     }
 
@@ -134,7 +157,6 @@ const useRandomCall = ({
       apiKey: STREAM_API_KEY,
       user,
       token: tokenData.token,
-
       options: {
         devicePersistence: {
           enabled: false,
@@ -177,25 +199,13 @@ const useRandomCall = ({
       setCall(null);
     }
 
-    let leaveResult;
-    try {
-      leaveResult = await leaveRandomMatch(sessionId, expectedCallId);
-    } catch (error) {
-      logRandomCall("match-leave-error", {
-        callId: expectedCallId,
-        sessionId,
-        ...describeRandomCallError(error),
-      });
-      throw error;
-    }
-
+    const leaveResult = await cancelMatchmaking(sessionId, expectedCallId);
     if (!leaveResult?.success) {
-      const error = new Error("Matchmaking cleanup was rejected as stale");
       logRandomCall("match-leave-stale", {
         callId: expectedCallId,
         sessionId,
       });
-      throw error;
+      throw new Error("Matchmaking cleanup was rejected as stale");
     }
 
     logRandomCall("match-leave-success", {
@@ -208,50 +218,59 @@ const useRandomCall = ({
       currentPeerIdRef.current = null;
       setCall(null);
     }
-  }, [leaveCallSafely]);
+  }, [cancelMatchmaking, leaveCallSafely]);
 
-  const restartSearch = useCallback(
-    async ({
-      peerId = null,
-      delay = 0,
-    } = {}) => {
-      const sessionId = activeSessionIdRef.current;
-      const activeCall = currentCallRef.current;
-      const expectedCallId = activeCall?.id ?? null;
+  const startNewLifecycle = useCallback(() => {
+    lifecycleRef.current += 1;
+    const sessionId = createSessionId();
+    activeSessionIdRef.current = sessionId;
+    socketRef.current?.disconnect();
+    return sessionId;
+  }, []);
 
-      logRandomCall("restart-search", {
-        callId: expectedCallId,
-        sessionId,
-        delayMs: delay,
-        joining: joiningRef.current,
+  const scheduleSearch = useCallback((delay = 0) => {
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+    }
+
+    retryTimerRef.current = setTimeout(() => {
+      retryTimerRef.current = null;
+      logRandomCall("restart-search-fired", {
+        sessionId: activeSessionIdRef.current,
       });
+      setSearchVersion((version) => version + 1);
+    }, delay);
+  }, []);
 
-      if (peerId) {
-        previousPeerIdRef.current = String(peerId);
-      }
+  const restartSearch = useCallback(async ({
+    peerId = null,
+    delay = 0,
+  } = {}) => {
+    const sessionId = activeSessionIdRef.current;
+    const activeCall = currentCallRef.current;
+    const expectedCallId = activeCall?.id ?? null;
 
-      await cleanupCurrentCall({
-        targetCall: activeCall,
-        sessionId,
-        expectedCallId,
-      });
+    logRandomCall("restart-search", {
+      callId: expectedCallId,
+      sessionId,
+      delayMs: delay,
+      joining: Boolean(joiningCallIdRef.current),
+    });
 
-      activeSessionIdRef.current = createSessionId();
-      setPhase("searching");
+    if (peerId) {
+      previousPeerIdRef.current = String(peerId);
+    }
 
-      if (retryTimerRef.current) {
-        clearTimeout(retryTimerRef.current);
-      }
+    await cleanupCurrentCall({
+      targetCall: activeCall,
+      sessionId,
+      expectedCallId,
+    });
 
-      retryTimerRef.current = setTimeout(() => {
-        logRandomCall("restart-search-fired", {
-          sessionId: activeSessionIdRef.current,
-        });
-        setSearchVersion((version) => version + 1);
-      }, delay);
-    },
-    [cleanupCurrentCall],
-  );
+    startNewLifecycle();
+    setPhase("searching");
+    scheduleSearch(delay);
+  }, [cleanupCurrentCall, scheduleSearch, startNewLifecycle]);
 
   useEffect(() => {
     if (!videoClient) {
@@ -259,13 +278,34 @@ const useRandomCall = ({
     }
 
     let cancelled = false;
-    let pollTimer = null;
-    let pollCount = 0;
-    let lastStatus = null;
+    let joinWaitTimer = null;
+    let connectErrorTimer = null;
+    let searchStarted = false;
     let searchAttempt = 0;
+
     const sessionId = activeSessionIdRef.current;
+    const lifecycleId = lifecycleRef.current;
+    const socket = createRealtimeSocket();
+    socketRef.current = socket;
+
+    const isCurrentLifecycle = () =>
+      !cancelled &&
+      !leavingPageRef.current &&
+      lifecycleRef.current === lifecycleId &&
+      activeSessionIdRef.current === sessionId;
+
+    const clearConnectErrorTimer = () => {
+      if (connectErrorTimer) {
+        clearTimeout(connectErrorTimer);
+        connectErrorTimer = null;
+      }
+    };
 
     const handleInactiveSession = (statusData) => {
+      if (!isCurrentLifecycle()) {
+        return true;
+      }
+
       if (statusData.status === "session-conflict") {
         logRandomCall("session-conflict", { sessionId });
         setPhase("error");
@@ -293,7 +333,7 @@ const useRandomCall = ({
         streamLeaveError = error;
       }
 
-      const leaveResult = await leaveRandomMatch(sessionId, matchData.callId);
+      const leaveResult = await cancelMatchmaking(sessionId, matchData.callId);
       if (!leaveResult?.success) {
         throw new Error("Failed call cleanup was rejected as stale");
       }
@@ -302,7 +342,10 @@ const useRandomCall = ({
         currentCallRef.current = null;
         currentPeerIdRef.current = null;
       }
-      setCall(null);
+
+      if (isCurrentLifecycle()) {
+        setCall(null);
+      }
 
       if (streamLeaveError) {
         logRandomCall("failed-join-stream-cleanup-error", {
@@ -314,28 +357,40 @@ const useRandomCall = ({
 
     const joinMatchedCall = async (matchData) => {
       if (
-        cancelled ||
-        joiningRef.current ||
-        leavingPageRef.current
+        !isCurrentLifecycle() ||
+        (matchData?.sessionId && matchData.sessionId !== sessionId)
       ) {
-        logRandomCall("join-skipped", {
+        logRandomCall("stale-match-ignored", {
           callId: matchData?.callId ?? null,
-          cancelled,
-          joining: joiningRef.current,
-          leavingPage: leavingPageRef.current,
+          eventSessionId: matchData?.sessionId ?? null,
+          sessionId,
         });
         return;
       }
 
       if (
-        !matchData?.callId ||
-        !matchData?.peerId
+        currentCallRef.current?.id === matchData?.callId ||
+        joiningCallIdRef.current === matchData?.callId
       ) {
+        return;
+      }
+
+      if (joiningCallIdRef.current) {
+        clearTimeout(joinWaitTimer);
+        joinWaitTimer = setTimeout(() => {
+          if (isCurrentLifecycle()) {
+            void joinMatchedCall(matchData);
+          }
+        }, JOIN_RETRY_DELAY);
+        return;
+      }
+
+      if (!matchData?.callId || !matchData?.peerId) {
         logRandomCall("join-invalid-match");
         return;
       }
 
-      joiningRef.current = true;
+      joiningCallIdRef.current = matchData.callId;
       const joinAttempt = ++joinAttemptRef.current;
       const startedAt = performance.now();
       let stage = "prepare";
@@ -351,46 +406,36 @@ const useRandomCall = ({
           maxJoinRetries: MAX_JOIN_RETRIES,
         });
 
-        nextCall = videoClient.call(
-          "default",
-          matchData.callId,
-        );
-
+        nextCall = videoClient.call("default", matchData.callId);
         await Promise.allSettled([
           nextCall.camera.disable(),
           nextCall.microphone.disable(),
         ]);
+
+        if (!isCurrentLifecycle()) {
+          await leaveCallSafely(nextCall);
+          return;
+        }
 
         stage = "stream-join";
         await nextCall.join({
           create: true,
           maxJoinRetries: MAX_JOIN_RETRIES,
         });
+
         logRandomCall("join-success", {
           callId: matchData.callId,
           joinAttempt,
           elapsedMs: Math.round(performance.now() - startedAt),
         });
 
-        if (
-          cancelled ||
-          leavingPageRef.current
-        ) {
-          logRandomCall("join-abandoned", {
-            callId: matchData.callId,
-            joinAttempt,
-          });
+        if (!isCurrentLifecycle()) {
           await leaveCallSafely(nextCall);
           return;
         }
 
         currentCallRef.current = nextCall;
-        currentPeerIdRef.current = String(
-          matchData.peerId,
-        );
-
-        setCall(nextCall);
-        setPhase("in-call");
+        currentPeerIdRef.current = String(matchData.peerId);
 
         stage = "enable-media";
         logRandomCall("media-enable-start", {
@@ -398,11 +443,24 @@ const useRandomCall = ({
           joinAttempt,
         });
         await enableAvailableMedia(nextCall);
+
+        if (!isCurrentLifecycle()) {
+          await leaveCallSafely(nextCall);
+          if (currentCallRef.current === nextCall) {
+            currentCallRef.current = null;
+            currentPeerIdRef.current = null;
+          }
+          return;
+        }
+
         logRandomCall("media-enable-finished", {
           callId: matchData.callId,
           joinAttempt,
           elapsedMs: Math.round(performance.now() - startedAt),
         });
+
+        setCall(nextCall);
+        setPhase("in-call");
       } catch (error) {
         logRandomCall("call-setup-error", {
           callId: matchData.callId,
@@ -411,12 +469,8 @@ const useRandomCall = ({
           elapsedMs: Math.round(performance.now() - startedAt),
           ...describeRandomCallError(error),
         });
-        console.error("Failed to join random call:", describeRandomCallError(error));
 
-        if (
-          cancelled ||
-          leavingPageRef.current
-        ) {
+        if (!isCurrentLifecycle()) {
           if (nextCall) {
             leaveCallSafely(nextCall).catch(() => {});
           }
@@ -426,6 +480,9 @@ const useRandomCall = ({
         try {
           await cleanupFailedJoin(nextCall, matchData);
         } catch (cleanupError) {
+          if (!isCurrentLifecycle()) {
+            return;
+          }
           logRandomCall("failed-join-cleanup-error", {
             callId: matchData.callId,
             ...describeRandomCallError(cleanupError),
@@ -435,34 +492,28 @@ const useRandomCall = ({
           return;
         }
 
+        if (!isCurrentLifecycle()) {
+          return;
+        }
+
         if (matchData.peerId) {
           previousPeerIdRef.current = String(matchData.peerId);
         }
 
         if (isSfuConnectionError(error)) {
-          toast.error(
-            "Video server connection failed. Retrying...",
-          );
-
-          activeSessionIdRef.current = createSessionId();
+          toast.error("Video server connection failed. Retrying...");
+          startNewLifecycle();
           setPhase("searching");
-
-          logRandomCall("retry-search-scheduled", {
-            callId: matchData.callId,
-            delayMs: SFU_RETRY_DELAY,
-          });
-          retryTimerRef.current = setTimeout(() => {
-            logRandomCall("retry-search-fired", { callId: matchData.callId });
-            setSearchVersion((version) => version + 1);
-          }, SFU_RETRY_DELAY);
-
+          scheduleSearch(SFU_RETRY_DELAY);
           return;
         }
 
         setPhase("error");
         toast.error("Could not join the random call.");
       } finally {
-        joiningRef.current = false;
+        if (joiningCallIdRef.current === matchData.callId) {
+          joiningCallIdRef.current = null;
+        }
         logRandomCall("join-finished", {
           callId: matchData.callId,
           joinAttempt,
@@ -471,78 +522,16 @@ const useRandomCall = ({
       }
     };
 
-    const pollMatchStatus = async () => {
-      if (
-        cancelled ||
-        leavingPageRef.current
-      ) {
+    const beginSearch = async (force = false) => {
+      if (!isCurrentLifecycle()) {
+        return;
+      }
+      if (searchStarted && !force) {
         return;
       }
 
+      searchStarted = true;
       try {
-        pollCount += 1;
-        const startedAt = performance.now();
-        const statusData = await getRandomMatchStatus(sessionId);
-
-        if (
-          cancelled ||
-          leavingPageRef.current
-        ) {
-          return;
-        }
-
-        if (statusData.status !== lastStatus || pollCount % 5 === 0) {
-          logRandomCall("status-result", {
-            searchAttempt,
-            pollCount,
-            status: statusData.status,
-            callId: statusData.callId ?? null,
-            elapsedMs: Math.round(performance.now() - startedAt),
-          });
-        }
-        lastStatus = statusData.status;
-
-        if (handleInactiveSession(statusData)) {
-          return;
-        }
-
-        if (statusData.status === "matched") {
-          await joinMatchedCall(statusData);
-          return;
-        }
-
-        pollTimer = setTimeout(
-          pollMatchStatus,
-          POLLING_INTERVAL,
-        );
-      } catch (error) {
-        if (
-          cancelled ||
-          leavingPageRef.current
-        ) {
-          return;
-        }
-
-        logRandomCall("status-error", {
-          searchAttempt,
-          pollCount,
-          ...describeRandomCallError(error),
-        });
-        console.error("Match status polling failed:", describeRandomCallError(error));
-
-        pollTimer = setTimeout(
-          pollMatchStatus,
-          POLLING_INTERVAL,
-        );
-      }
-    };
-
-    const beginSearch = async () => {
-      try {
-        if (leavingPageRef.current) {
-          return;
-        }
-
         setCall(null);
         setPhase("searching");
         searchAttempt = ++searchAttemptRef.current;
@@ -559,10 +548,7 @@ const useRandomCall = ({
           sessionId,
         );
 
-        if (
-          cancelled ||
-          leavingPageRef.current
-        ) {
+        if (!isCurrentLifecycle()) {
           return;
         }
 
@@ -578,19 +564,10 @@ const useRandomCall = ({
         }
 
         if (searchData.status === "matched") {
-          await joinMatchedCall(searchData);
-          return;
+          await joinMatchedCall({ ...searchData, sessionId });
         }
-
-        pollTimer = setTimeout(
-          pollMatchStatus,
-          POLLING_INTERVAL,
-        );
       } catch (error) {
-        if (
-          cancelled ||
-          leavingPageRef.current
-        ) {
+        if (!isCurrentLifecycle()) {
           return;
         }
 
@@ -598,111 +575,167 @@ const useRandomCall = ({
           searchAttempt,
           ...describeRandomCallError(error),
         });
-        console.error("Random search failed:", describeRandomCallError(error));
-
         setPhase("error");
         toast.error("Could not search for a stranger.");
       }
     };
 
-    beginSearch();
+    const processState = async (state, source) => {
+      if (
+        !isCurrentLifecycle() ||
+        state?.sessionId !== sessionId
+      ) {
+        return;
+      }
+
+      logRandomCall("realtime-state", {
+        source,
+        sessionId,
+        status: state.status,
+        callId: state.callId ?? null,
+      });
+
+      if (handleInactiveSession(state)) {
+        return;
+      }
+
+      if (state.status === "matched") {
+        await joinMatchedCall(state);
+      } else if (state.status === "waiting" || state.status === "idle") {
+        setPhase("searching");
+      }
+    };
+
+    const reconcile = async () => {
+      try {
+        const response = await emitWithAck(socket, "matchmaking:reconcile", {
+          sessionId,
+        });
+
+        if (!isCurrentLifecycle()) {
+          return;
+        }
+
+        await processState(response.state, "reconcile");
+        if (!isCurrentLifecycle()) {
+          return;
+        }
+
+        if (response.state.status === "idle" && currentCallRef.current) {
+          const staleCall = currentCallRef.current;
+          await leaveCallSafely(staleCall);
+          if (!isCurrentLifecycle()) {
+            return;
+          }
+          if (currentCallRef.current === staleCall) {
+            currentCallRef.current = null;
+            currentPeerIdRef.current = null;
+            setCall(null);
+          }
+        }
+
+        if (response.state.status === "idle" || response.state.status === "waiting") {
+          await beginSearch(response.state.status === "idle");
+        }
+      } catch (error) {
+        if (!isCurrentLifecycle()) {
+          return;
+        }
+
+        logRandomCall("socket-reconcile-error", {
+          sessionId,
+          ...describeRandomCallError(error),
+        });
+        setPhase("error");
+        toast.error("Could not connect to realtime matchmaking.");
+      }
+    };
+
+    socket.on("connect", () => {
+      clearConnectErrorTimer();
+      if (!isCurrentLifecycle()) {
+        socket.disconnect();
+        return;
+      }
+      logRandomCall("socket-connected", { socketId: socket.id, sessionId });
+      void reconcile();
+    });
+
+    socket.on("connect_error", (error) => {
+      logRandomCall("socket-connect-error", {
+        sessionId,
+        ...describeRandomCallError(error),
+      });
+
+      if (!connectErrorTimer) {
+        connectErrorTimer = setTimeout(() => {
+          connectErrorTimer = null;
+          if (!isCurrentLifecycle() || socket.connected) {
+            return;
+          }
+          setPhase("error");
+          toast.error("Could not connect to realtime matchmaking. Try again.");
+        }, SOCKET_CONNECT_GRACE);
+      }
+    });
+
+    socket.on("matchmaking:matched", (state) => {
+      void processState(state, "matched-event");
+    });
+
+    socket.on("matchmaking:cancelled", (state) => {
+      void processState(state, "cancelled-event");
+    });
+
+    socket.on("call:peer-left", (event) => {
+      if (
+        !isCurrentLifecycle() ||
+        joiningCallIdRef.current ||
+        event?.sessionId !== sessionId ||
+        event?.callId !== currentCallRef.current?.id
+      ) {
+        return;
+      }
+      serverPeerLeftRef.current?.(event.peerId, event.callId);
+    });
+
+    socket.connect();
 
     return () => {
       cancelled = true;
+      clearTimeout(joinWaitTimer);
+      clearConnectErrorTimer();
+      socket.disconnect();
+      if (socketRef.current === socket) {
+        socketRef.current = null;
+      }
       logRandomCall("search-effect-cleanup", {
         searchAttempt,
         searchVersion,
         sessionId,
-        pollCount,
-        joining: joiningRef.current,
+        joining: Boolean(joiningCallIdRef.current),
       });
-
-      if (pollTimer) {
-        clearTimeout(pollTimer);
-      }
     };
   }, [
+    cancelMatchmaking,
     leaveCallSafely,
+    scheduleSearch,
+    startNewLifecycle,
     videoClient,
     searchVersion,
   ]);
 
-  const handleNext = useCallback(
-    async (peerId) => {
-      const excludedPeerId = peerId || currentPeerIdRef.current;
-      logRandomCall("next-click", {
-        callId: currentCallRef.current?.id ?? null,
-        joining: joiningRef.current,
-        transitioning: transitioningRef.current,
-        hasExcludedPeer: Boolean(excludedPeerId),
-      });
-      if (
-        transitioningRef.current ||
-        leavingPageRef.current
-      ) {
-        return;
-      }
-
-      transitioningRef.current = true;
-
-      try {
-        await restartSearch({
-          peerId: excludedPeerId,
-        });
-      } catch (error) {
-        logRandomCall("next-error", {
-          ...describeRandomCallError(error),
-        });
-        setPhase("error");
-        toast.error("Could not leave the current call. Try again.");
-      } finally {
-        transitioningRef.current = false;
-      }
-    },
-    [restartSearch],
-  );
-
-  const handlePeerLeft = useCallback(
-    async (peerId) => {
-      logRandomCall("peer-left-callback", {
-        callId: currentCallRef.current?.id ?? null,
-        joining: joiningRef.current,
-      });
-      if (
-        transitioningRef.current ||
-        leavingPageRef.current
-      ) {
-        return;
-      }
-
-      transitioningRef.current = true;
-
-      if (peerId) {
-        previousPeerIdRef.current = String(peerId);
-      }
-
-      try {
-        await cleanupCurrentCall();
-        setPhase("peer-left");
-      } catch (error) {
-        logRandomCall("peer-left-cleanup-error", {
-          ...describeRandomCallError(error),
-        });
-        setPhase("error");
-        toast.error("Could not clean up the disconnected call.");
-      } finally {
-        transitioningRef.current = false;
-      }
-    },
-    [cleanupCurrentCall],
-  );
-
-  const handlePeerJoinTimeout = useCallback(async () => {
-    logRandomCall("peer-timeout-callback", {
+  const handleNext = useCallback(async (peerId) => {
+    const excludedPeerId = peerId || currentPeerIdRef.current;
+    logRandomCall("next-click", {
       callId: currentCallRef.current?.id ?? null,
-      joining: joiningRef.current,
+      joining: Boolean(joiningCallIdRef.current),
+      transitioning: transitioningRef.current,
+      hasExcludedPeer: Boolean(excludedPeerId),
     });
+
     if (
+      joiningCallIdRef.current ||
       transitioningRef.current ||
       leavingPageRef.current
     ) {
@@ -710,17 +743,84 @@ const useRandomCall = ({
     }
 
     transitioningRef.current = true;
+    try {
+      await restartSearch({ peerId: excludedPeerId });
+    } catch (error) {
+      logRandomCall("next-error", {
+        ...describeRandomCallError(error),
+      });
+      setPhase("error");
+      toast.error("Could not leave the current call. Try again.");
+    } finally {
+      transitioningRef.current = false;
+    }
+  }, [restartSearch]);
 
+  const handlePeerLeft = useCallback(async (peerId) => {
+    logRandomCall("peer-left-callback", {
+      callId: currentCallRef.current?.id ?? null,
+      joining: Boolean(joiningCallIdRef.current),
+    });
+
+    if (
+      joiningCallIdRef.current ||
+      transitioningRef.current ||
+      leavingPageRef.current
+    ) {
+      return;
+    }
+
+    transitioningRef.current = true;
+    if (peerId) {
+      previousPeerIdRef.current = String(peerId);
+    }
+
+    try {
+      await cleanupCurrentCall();
+      setPhase("peer-left");
+    } catch (error) {
+      logRandomCall("peer-left-cleanup-error", {
+        ...describeRandomCallError(error),
+      });
+      setPhase("error");
+      toast.error("Could not clean up the disconnected call.");
+    } finally {
+      transitioningRef.current = false;
+    }
+  }, [cleanupCurrentCall]);
+
+  useEffect(() => {
+    serverPeerLeftRef.current = (peerId, callId) => {
+      if (currentCallRef.current?.id !== callId) {
+        return;
+      }
+      void handlePeerLeft(peerId);
+    };
+    return () => {
+      serverPeerLeftRef.current = null;
+    };
+  }, [handlePeerLeft]);
+
+  const handlePeerJoinTimeout = useCallback(async () => {
+    logRandomCall("peer-timeout-callback", {
+      callId: currentCallRef.current?.id ?? null,
+      joining: Boolean(joiningCallIdRef.current),
+    });
+
+    if (
+      joiningCallIdRef.current ||
+      transitioningRef.current ||
+      leavingPageRef.current
+    ) {
+      return;
+    }
+
+    transitioningRef.current = true;
     const peerId = currentPeerIdRef.current;
 
     try {
-      toast.error(
-        "Stranger could not connect. Finding another user...",
-      );
-
-      await restartSearch({
-        peerId,
-      });
+      toast.error("Stranger could not connect. Finding another user...");
+      await restartSearch({ peerId });
     } catch (error) {
       logRandomCall("peer-timeout-cleanup-error", {
         ...describeRandomCallError(error),
@@ -735,8 +835,11 @@ const useRandomCall = ({
   const handleFindNext = useCallback(async () => {
     logRandomCall("find-next-click", {
       hasTokenError: isTokenError,
+      joining: Boolean(joiningCallIdRef.current),
     });
+
     if (
+      joiningCallIdRef.current ||
       leavingPageRef.current ||
       transitioningRef.current
     ) {
@@ -768,11 +871,13 @@ const useRandomCall = ({
     logRandomCall("leave-page-click", {
       callId: currentCallRef.current?.id ?? null,
     });
+
     if (leavingPageRef.current) {
       return;
     }
 
     leavingPageRef.current = true;
+    lifecycleRef.current += 1;
 
     if (retryTimerRef.current) {
       clearTimeout(retryTimerRef.current);
@@ -787,7 +892,6 @@ const useRandomCall = ({
       logRandomCall("leave-page-error", {
         ...describeRandomCallError(error),
       });
-      console.error("Failed to leave random call:", describeRandomCallError(error));
       setPhase("error");
       toast.error("Could not leave the random call. Try again.");
     }
@@ -795,6 +899,7 @@ const useRandomCall = ({
 
   useEffect(() => {
     return () => {
+      lifecycleRef.current += 1;
       const activeCall = currentCallRef.current;
       const sessionId = activeSessionIdRef.current;
       const callId = activeCall?.id ?? null;
@@ -802,7 +907,7 @@ const useRandomCall = ({
       logRandomCall("page-unmount", {
         callId,
         sessionId,
-        joining: joiningRef.current,
+        joining: Boolean(joiningCallIdRef.current),
         leavingPage: leavingPageRef.current,
       });
 
@@ -849,7 +954,6 @@ const useRandomCall = ({
     call,
     phase: isTokenError ? "error" : phase,
     isLoading,
-
     handleNext,
     handlePeerLeft,
     handlePeerJoinTimeout,

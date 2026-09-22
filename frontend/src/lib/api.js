@@ -87,17 +87,6 @@ export const startRandomSearch = async (
   return response.data;
 };
 
-export const getRandomMatchStatus = async (sessionId) => {
-  const response = await axiosInstance.get(
-    "/omegle/status",
-    {
-      params: { sessionId },
-    },
-  );
-
-  return response.data;
-};
-
 export const leaveRandomMatch = async (
   sessionId,
   callId = null,

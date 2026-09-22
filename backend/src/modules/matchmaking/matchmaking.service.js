@@ -7,10 +7,15 @@ import {
   getWaitingUsers,
   isSessionCancelled,
   refreshWaitingUser,
+  refreshMatch,
   removeMatch,
   saveWaitingUser,
   tryCreateMatch,
 } from "./matchmaking.repository.js";
+import {
+  emitMatchCancelled,
+  emitMatchCreated,
+} from "./matchmaking.events.js";
 
 const isExcluded = (user, candidate, now) =>
   (user.excludeUserId === candidate.userId && now < user.excludeUntil) ||
@@ -37,7 +42,9 @@ const getOwnedMatch = async (userId, sessionId) => {
 
 const createMatch = async (userId, candidateId) => {
   const callId = generateCallId();
-  return tryCreateMatch(userId, candidateId, callId);
+  const match = await tryCreateMatch(userId, candidateId, callId);
+  if (match) {emitMatchCreated(match.matches);}
+  return match;
 };
 
 const findMatch = async (userId, sessionId) => {
@@ -60,7 +67,7 @@ const findMatch = async (userId, sessionId) => {
 
     const match = await createMatch(userId, candidate.userId);
     if (match) {
-      return match;
+      return toPublicMatch(match);
     }
 
     const ownedMatch = await getOwnedMatch(userId, sessionId);
@@ -194,5 +201,17 @@ export const leave = async (userId, sessionId, expectedCallId = null) => {
   if (result.stale) {
     return { success: false, stale: true };
   }
+  if (result.waitingRemoved || result.matchRemoved) {
+    emitMatchCancelled({
+      userId,
+      sessionId,
+      callId: result.callId,
+      peerId: result.peerRemoved ? result.peerId : null,
+      peerSessionId: result.peerRemoved ? result.peerSessionId : null,
+    });
+  }
   return { success: true };
 };
+
+export const renewMatch = async (userId, sessionId, callId) =>
+  Boolean(await refreshMatch(userId, sessionId, callId));

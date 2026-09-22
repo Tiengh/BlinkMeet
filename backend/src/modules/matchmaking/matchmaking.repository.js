@@ -70,7 +70,16 @@ redis.call('SET', KEYS[5], cjson.encode({
   status='matched', callId=ARGV[3], peerId=ARGV[1],
   sessionId=b.sessionId, peerSessionId=a.sessionId
 }), 'PX', ARGV[4])
-return 1
+return cjson.encode({
+  first={
+    userId=ARGV[1], status='matched', callId=ARGV[3], peerId=ARGV[2],
+    sessionId=a.sessionId, peerSessionId=b.sessionId
+  },
+  second={
+    userId=ARGV[2], status='matched', callId=ARGV[3], peerId=ARGV[1],
+    sessionId=b.sessionId, peerSessionId=a.sessionId
+  }
+})
 `;
 
 const removeSessionScript = `
@@ -97,6 +106,7 @@ if waitingValue then
 end
 
 local matchRemoved = 0
+local peerRemoved = 0
 if matchValue then
   local match = cjson.decode(matchValue)
   if match.sessionId == ARGV[3] and
@@ -113,6 +123,7 @@ if matchValue then
          peer.sessionId == match.peerSessionId and
          peer.peerSessionId == ARGV[3] then
         redis.call('DEL', peerKey)
+        peerRemoved = 1
         local peerCancelledKey = ARGV[6] .. match.peerId .. ':' .. match.peerSessionId
         redis.call('SET', peerCancelledKey, '1', 'PX', ARGV[5])
       end
@@ -123,8 +134,31 @@ end
 return cjson.encode({
   waitingRemoved=waitingRemoved,
   matchRemoved=matchRemoved,
-  stale=0
+  peerRemoved=peerRemoved,
+  stale=0,
+  callId=matchValue and cjson.decode(matchValue).callId or cjson.null,
+  peerId=matchValue and cjson.decode(matchValue).peerId or cjson.null,
+  peerSessionId=matchValue and cjson.decode(matchValue).peerSessionId or cjson.null
 })
+`;
+
+const refreshMatchScript = `
+local currentValue = redis.call('GET', KEYS[1])
+if not currentValue then return false end
+local current = cjson.decode(currentValue)
+if current.sessionId ~= ARGV[1] or current.callId ~= ARGV[2] then return false end
+
+local peerValue = redis.call('GET', KEYS[2])
+if not peerValue then return false end
+local peer = cjson.decode(peerValue)
+if peer.callId ~= current.callId or peer.peerId ~= ARGV[3] or
+   peer.sessionId ~= current.peerSessionId or peer.peerSessionId ~= current.sessionId then
+  return false
+end
+
+redis.call('PEXPIRE', KEYS[1], ARGV[4])
+redis.call('PEXPIRE', KEYS[2], ARGV[4])
+return cjson.encode(current)
 `;
 
 const runScript = (script, keys, args) =>
@@ -196,7 +230,7 @@ export const getMatch = async (userId) => {
 };
 
 export const tryCreateMatch = async (userId, candidateId, callId) => {
-  const claimed = await runScript(claimScript,
+  const value = await runScript(claimScript,
     [
       redisKeys.waiting,
       redisKeys.waitingUser(userId),
@@ -205,7 +239,21 @@ export const tryCreateMatch = async (userId, candidateId, callId) => {
       redisKeys.match(candidateId),
     ],
     [userId, candidateId, callId, MATCH_TTL, Date.now()]);
-  return claimed ? { status: "matched", callId, peerId: candidateId } : null;
+  if (!value) {return null;}
+  const claimed = JSON.parse(value);
+  return {
+    ...claimed.first,
+    matches: [claimed.first, claimed.second],
+  };
+};
+
+export const refreshMatch = async (userId, sessionId, callId) => {
+  const current = await getMatch(userId);
+  if (!current) {return null;}
+  const value = await runScript(refreshMatchScript,
+    [redisKeys.match(userId), redisKeys.match(current.peerId)],
+    [sessionId, callId, userId, MATCH_TTL]);
+  return value ? JSON.parse(value) : null;
 };
 
 export const removeMatch = async (userId, sessionId, expectedCallId = null) => {

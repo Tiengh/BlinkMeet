@@ -9,11 +9,12 @@ import friendRoutes from "./modules/friend/friend.routes.js";
 import chatRoutes from "./modules/chat/chat.routes.js";
 import matchmakingRoutes from "./modules/matchmaking/matchmaking.routes.js";
 import { errorMiddleware } from "./middleware/error.middleware.js";
+import { corsOptions } from "./shared/cors.config.js";
 
 const app = express();
 const __dirname = path.resolve();
 
-app.use(cors({ origin: "http://localhost:5173", credentials: true }));
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(cookieParser());
 
