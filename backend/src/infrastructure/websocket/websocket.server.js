@@ -24,8 +24,9 @@ import {
 import {
   connectPresence,
   disconnectPresence,
-  findExpiredOfflineUsers,
-  getFriendPresence,
+  findExpiredPresenceTransitions,
+  getAllowedFriendIds,
+  getPresenceForUsers,
   refreshPresence,
 } from "../../modules/presence/presence.service.js";
 import { PRESENCE_SWEEP_INTERVAL } from "../../modules/presence/presence.constants.js";
@@ -49,8 +50,10 @@ export const initializeWebSocketServer = async (httpServer) => {
 
   presenceSweepTimer = setInterval(async () => {
     try {
-      const offlineUserIds = await findExpiredOfflineUsers();
-      offlineUserIds.forEach((userId) => emitPresenceChanged(userId, "offline"));
+      const transitions = await findExpiredPresenceTransitions();
+      transitions.forEach(({ userId, status, version }) => {
+        emitPresenceChanged(userId, status, version);
+      });
     } catch (error) {
       console.error("Presence expiration sweep failed:", error);
     }
@@ -77,7 +80,8 @@ export const initializeWebSocketServer = async (httpServer) => {
     registerPresenceSocket(socket, {
       connectPresence,
       disconnectPresence,
-      getFriendPresence,
+      getAllowedFriendIds,
+      getPresenceForUsers,
       refreshPresence,
     });
 

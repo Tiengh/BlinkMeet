@@ -23,19 +23,38 @@ const createSocket = () => {
   };
 };
 
-test("presence subscription uses authenticated identity and friend allowlist", async () => {
+const inactiveTransition = async () => ({
+  changed: false,
+  status: "online",
+  version: 1,
+});
+
+test("presence subscription authorizes, joins rooms, then reads snapshot", async () => {
   const { socket, handlers, joined } = createSocket();
   const requestedBy = [];
+  const operations = [];
+  socket.join = async (room) => {
+    operations.push(`join:${room}`);
+    joined.push(room);
+  };
+
   registerPresenceSocket(socket, {
-    connectPresence: async () => false,
-    disconnectPresence: async () => false,
-    refreshPresence: async () => false,
-    getFriendPresence: async (userId, requestedIds) => {
+    connectPresence: inactiveTransition,
+    disconnectPresence: async () => ({
+      changed: false,
+      status: "offline",
+      version: 1,
+    }),
+    refreshPresence: inactiveTransition,
+    getAllowedFriendIds: async (userId, requestedIds) => {
+      operations.push("authorize");
       requestedBy.push([userId, requestedIds]);
-      return {
-        friendIds: ["friend-a"],
-        statuses: { "friend-a": { status: "online" } },
-      };
+      return ["friend-a"];
+    },
+    getPresenceForUsers: async (friendIds) => {
+      operations.push("snapshot");
+      assert.deepEqual(friendIds, ["friend-a"]);
+      return { "friend-a": { status: "online", version: 7 } };
     },
   });
 
@@ -52,11 +71,60 @@ test("presence subscription uses authenticated identity and friend allowlist", a
     ["friend-a", "stranger"],
   ]]);
   assert.deepEqual(joined, ["presence:watch:friend-a"]);
+  assert.deepEqual(operations, [
+    "authorize",
+    "join:presence:watch:friend-a",
+    "snapshot",
+  ]);
   assert.equal(response.ok, true);
-  assert.equal(response.statuses["friend-a"].status, "online");
+  assert.deepEqual(response.statuses["friend-a"], {
+    status: "online",
+    version: 7,
+  });
 });
 
-test("disconnect only emits offline when the last socket leaves", async () => {
+test("presence subscriptions are serialized per socket", async () => {
+  const { socket, handlers } = createSocket();
+  let releaseFirst;
+  const firstGate = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  const authorizeCalls = [];
+
+  registerPresenceSocket(socket, {
+    connectPresence: inactiveTransition,
+    disconnectPresence: async () => ({
+      changed: false,
+      status: "offline",
+      version: 1,
+    }),
+    refreshPresence: inactiveTransition,
+    getAllowedFriendIds: async (_userId, requestedIds) => {
+      authorizeCalls.push(requestedIds);
+      if (authorizeCalls.length === 1) {await firstGate;}
+      return requestedIds;
+    },
+    getPresenceForUsers: async () => ({}),
+  });
+
+  const firstResponse = new Promise((resolve) => {
+    handlers.get("presence:subscribe")({ userIds: ["friend-a"] }, resolve);
+  });
+  const secondResponse = new Promise((resolve) => {
+    handlers.get("presence:subscribe")({ userIds: ["friend-b"] }, resolve);
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(authorizeCalls, [["friend-a"]]);
+
+  releaseFirst();
+  await Promise.all([firstResponse, secondResponse]);
+  handlers.get("disconnect")();
+
+  assert.deepEqual(authorizeCalls, [["friend-a"], ["friend-b"]]);
+});
+
+test("disconnect emits versioned offline only when the last socket leaves", async () => {
   const delivered = [];
   configurePresenceEvents({
     to: (room) => ({
@@ -69,13 +137,22 @@ test("disconnect only emits offline when the last socket leaves", async () => {
     resolveDisconnected = resolve;
   });
   registerPresenceSocket(socket, {
-    connectPresence: async () => true,
+    connectPresence: async () => ({
+      changed: true,
+      status: "online",
+      version: 11,
+    }),
     disconnectPresence: async () => {
       resolveDisconnected();
-      return true;
+      return {
+        changed: true,
+        status: "offline",
+        version: 12,
+      };
     },
-    refreshPresence: async () => false,
-    getFriendPresence: async () => ({ friendIds: [], statuses: {} }),
+    refreshPresence: inactiveTransition,
+    getAllowedFriendIds: async () => [],
+    getPresenceForUsers: async () => ({}),
   });
 
   await new Promise((resolve) => setImmediate(resolve));
@@ -83,9 +160,9 @@ test("disconnect only emits offline when the last socket leaves", async () => {
   await disconnected;
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(delivered.map(({ payload }) => payload.status), [
-    "online",
-    "offline",
+  assert.deepEqual(delivered.map(({ payload }) => payload), [
+    { userId: "authenticated-user", status: "online", version: 11 },
+    { userId: "authenticated-user", status: "offline", version: 12 },
   ]);
   configurePresenceEvents(null);
 });

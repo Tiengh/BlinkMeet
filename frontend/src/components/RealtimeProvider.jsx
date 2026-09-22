@@ -11,20 +11,51 @@ import { createRealtimeSocket, emitWithAck } from "../lib/realtime.js";
 const RealtimeProvider = ({ userId, children }) => {
   const [presenceStatuses, setPresenceStatuses] = useState({});
   const socketRef = useRef(null);
-  const requestedUserIdsRef = useRef(null);
+  const requestedUserIdsRef = useRef([]);
+  const subscriptionRequestRef = useRef(0);
 
   const applyStatuses = useCallback((statuses) => {
-    setPresenceStatuses((current) => ({ ...current, ...statuses }));
+    setPresenceStatuses((current) => {
+      let changed = false;
+      const next = { ...current };
+
+      Object.entries(statuses || {}).forEach(([statusUserId, incoming]) => {
+        if (!incoming?.status) {return;}
+        const normalizedUserId = String(statusUserId);
+        const incomingVersion = Number(incoming.version ?? 0);
+        const currentVersion = Number(current[normalizedUserId]?.version ?? -1);
+        if (incomingVersion < currentVersion) {return;}
+
+        const normalized = {
+          status: incoming.status,
+          version: incomingVersion,
+        };
+        if (
+          current[normalizedUserId]?.status !== normalized.status ||
+          currentVersion !== normalized.version
+        ) {
+          next[normalizedUserId] = normalized;
+          changed = true;
+        }
+      });
+
+      return changed ? next : current;
+    });
   }, []);
 
   const subscribePresence = useCallback(async (userIds = null) => {
-    requestedUserIdsRef.current = userIds?.map(String) || null;
+    const normalizedUserIds = userIds === null
+      ? null
+      : [...new Set(userIds.map(String))];
+    requestedUserIdsRef.current = normalizedUserIds;
+    const requestId = ++subscriptionRequestRef.current;
     const socket = socketRef.current;
     if (!socket?.connected) {return;}
 
     const response = await emitWithAck(socket, "presence:subscribe", {
-      userIds: requestedUserIdsRef.current || undefined,
+      userIds: normalizedUserIds ?? undefined,
     });
+    if (requestId !== subscriptionRequestRef.current) {return;}
     applyStatuses(response.statuses || {});
   }, [applyStatuses]);
 
@@ -39,10 +70,14 @@ const RealtimeProvider = ({ userId, children }) => {
         console.error("Could not subscribe to friend presence:", error);
       });
     };
-    const handlePresenceChanged = ({ userId: changedUserId, status }) => {
+    const handlePresenceChanged = ({
+      userId: changedUserId,
+      status,
+      version,
+    }) => {
       if (!changedUserId || !status) {return;}
       applyStatuses({
-        [String(changedUserId)]: { status },
+        [String(changedUserId)]: { status, version },
       });
     };
 
@@ -51,6 +86,7 @@ const RealtimeProvider = ({ userId, children }) => {
     socket.connect();
 
     return () => {
+      subscriptionRequestRef.current += 1;
       socket.off("connect", handleConnect);
       socket.off("presence:changed", handlePresenceChanged);
       socket.disconnect();

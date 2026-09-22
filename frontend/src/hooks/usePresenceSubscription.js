@@ -9,10 +9,16 @@ const usePresenceSubscription = (users) => {
   );
 
   useEffect(() => {
-    if (!userIdsKey) {return;}
-    void subscribePresence(userIdsKey.split(",")).catch((error) => {
+    const userIds = userIdsKey ? userIdsKey.split(",") : [];
+    void subscribePresence(userIds).catch((error) => {
       console.error("Could not refresh friend presence:", error);
     });
+
+    return () => {
+      void subscribePresence([]).catch((error) => {
+        console.error("Could not clear friend presence subscription:", error);
+      });
+    };
   }, [subscribePresence, userIdsKey]);
 };
 

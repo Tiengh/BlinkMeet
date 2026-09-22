@@ -14,6 +14,7 @@ export const redisKeys = {
   prefix,
   presence: {
     users: `${presencePrefix}:users`,
+    versions: `${presencePrefix}:versions`,
     userSockets: (userId) => `${presencePrefix}:user:${userId}:sockets`,
     socket: (userId, socketId) =>
       `${presencePrefix}:user:${userId}:socket:${socketId}`,

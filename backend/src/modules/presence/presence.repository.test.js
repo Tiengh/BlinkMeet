@@ -8,6 +8,7 @@ const { connectRedis, getRedisClient } = await import(
 );
 const {
   clearAllPresenceState,
+  getPresenceState,
   getPresenceStatus,
   removePresenceSocket,
   touchPresenceSocket,
@@ -25,23 +26,54 @@ after(async () => {
 });
 
 test("presence stays online until the last active socket disconnects", async () => {
-  assert.equal(await touchPresenceSocket("user-a", "socket-1"), true);
-  assert.equal(await touchPresenceSocket("user-a", "socket-2"), false);
+  assert.deepEqual(await touchPresenceSocket("user-a", "socket-1"), {
+    becameOnline: true,
+    version: 1,
+  });
+  assert.deepEqual(await touchPresenceSocket("user-a", "socket-2"), {
+    becameOnline: false,
+    version: 1,
+  });
   assert.equal(await getPresenceStatus("user-a"), true);
 
-  assert.equal(await removePresenceSocket("user-a", "socket-1"), false);
+  assert.deepEqual(await removePresenceSocket("user-a", "socket-1"), {
+    becameOffline: false,
+    version: 1,
+  });
   assert.equal(await getPresenceStatus("user-a"), true);
 
-  assert.equal(await removePresenceSocket("user-a", "socket-2"), true);
+  assert.deepEqual(await removePresenceSocket("user-a", "socket-2"), {
+    becameOffline: true,
+    version: 2,
+  });
   assert.equal(await getPresenceStatus("user-a"), false);
+  assert.deepEqual(await removePresenceSocket("user-a", "socket-2"), {
+    becameOffline: false,
+    version: 2,
+  });
 });
 
-test("refreshing an expired socket reports a new online transition", async () => {
-  assert.equal(await touchPresenceSocket("user-b", "socket-1"), true);
+test("expiration and reconnect advance the presence version monotonically", async () => {
+  assert.deepEqual(await touchPresenceSocket("user-b", "socket-1"), {
+    becameOnline: true,
+    version: 1,
+  });
   const redis = getRedisClient();
   const { redisKeys } = await import("../../infrastructure/redis/redis.keys.js");
   await redis.del(redisKeys.presence.socket("user-b", "socket-1"));
 
-  assert.equal(await touchPresenceSocket("user-b", "socket-1"), true);
-  assert.equal(await getPresenceStatus("user-b"), true);
+  assert.deepEqual(await getPresenceState("user-b"), {
+    isOnline: false,
+    version: 2,
+    transitionedOffline: true,
+  });
+  assert.deepEqual(await getPresenceState("user-b"), {
+    isOnline: false,
+    version: 2,
+    transitionedOffline: false,
+  });
+  assert.deepEqual(await touchPresenceSocket("user-b", "socket-1"), {
+    becameOnline: true,
+    version: 3,
+  });
 });

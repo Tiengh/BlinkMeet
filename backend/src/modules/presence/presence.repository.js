@@ -18,11 +18,19 @@ redis.call('SADD', KEYS[1], ARGV[2])
 redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[5]) * 2)
 redis.call('ZADD', KEYS[3], 'GT', tonumber(ARGV[4]) + tonumber(ARGV[5]), ARGV[3])
 
-if activeBefore == 0 then return 1 end
-return 0
+local version = tonumber(redis.call('HGET', KEYS[4], ARGV[3]) or '0')
+local becameOnline = 0
+if activeBefore == 0 then
+  version = redis.call('HINCRBY', KEYS[4], ARGV[3], 1)
+  becameOnline = 1
+end
+
+return {becameOnline, version}
 `;
 
 const removeSocketScript = `
+local wasTracked = redis.call('ZSCORE', KEYS[3], ARGV[3]) ~= false
+
 redis.call('DEL', KEYS[2])
 redis.call('SREM', KEYS[1], ARGV[2])
 
@@ -39,18 +47,24 @@ for _, socketId in ipairs(socketIds) do
   end
 end
 
+local version = tonumber(redis.call('HGET', KEYS[4], ARGV[3]) or '0')
 if active == 0 then
   redis.call('DEL', KEYS[1])
   redis.call('ZREM', KEYS[3], ARGV[3])
-  return 1
+  if wasTracked then
+    version = redis.call('HINCRBY', KEYS[4], ARGV[3], 1)
+    return {1, version}
+  end
+  return {0, version}
 end
 
 redis.call('PEXPIRE', KEYS[1], maxTtl + tonumber(ARGV[4]))
 redis.call('ZADD', KEYS[3], tonumber(ARGV[5]) + maxTtl, ARGV[3])
-return 0
+return {0, version}
 `;
 
-const getStatusScript = `
+const getStateScript = `
+local wasTracked = redis.call('ZSCORE', KEYS[2], ARGV[2]) ~= false
 local socketIds = redis.call('SMEMBERS', KEYS[1])
 local active = 0
 local maxTtl = 0
@@ -64,15 +78,20 @@ for _, socketId in ipairs(socketIds) do
   end
 end
 
+local version = tonumber(redis.call('HGET', KEYS[3], ARGV[2]) or '0')
 if active == 0 then
   redis.call('DEL', KEYS[1])
   redis.call('ZREM', KEYS[2], ARGV[2])
-  return 0
+  if wasTracked then
+    version = redis.call('HINCRBY', KEYS[3], ARGV[2], 1)
+    return {0, version, 1}
+  end
+  return {0, version, 0}
 end
 
 redis.call('PEXPIRE', KEYS[1], maxTtl + tonumber(ARGV[3]))
 redis.call('ZADD', KEYS[2], tonumber(ARGV[4]) + maxTtl, ARGV[2])
-return active
+return {active, version, 0}
 `;
 
 const runScript = (script, keys, args) =>
@@ -83,12 +102,13 @@ export const touchPresenceSocket = async (
   socketId,
   now = Date.now(),
 ) => {
-  const becameOnline = await runScript(
+  const [becameOnline, version] = await runScript(
     touchSocketScript,
     [
       redisKeys.presence.userSockets(userId),
       redisKeys.presence.socket(userId, socketId),
       redisKeys.presence.users,
+      redisKeys.presence.versions,
     ],
     [
       redisKeys.presence.socketPrefix(userId),
@@ -98,7 +118,10 @@ export const touchPresenceSocket = async (
       PRESENCE_TTL,
     ],
   );
-  return Number(becameOnline) === 1;
+  return {
+    becameOnline: Number(becameOnline) === 1,
+    version: Number(version),
+  };
 };
 
 export const removePresenceSocket = async (
@@ -106,12 +129,13 @@ export const removePresenceSocket = async (
   socketId,
   now = Date.now(),
 ) => {
-  const becameOffline = await runScript(
+  const [becameOffline, version] = await runScript(
     removeSocketScript,
     [
       redisKeys.presence.userSockets(userId),
       redisKeys.presence.socket(userId, socketId),
       redisKeys.presence.users,
+      redisKeys.presence.versions,
     ],
     [
       redisKeys.presence.socketPrefix(userId),
@@ -121,13 +145,20 @@ export const removePresenceSocket = async (
       now,
     ],
   );
-  return Number(becameOffline) === 1;
+  return {
+    becameOffline: Number(becameOffline) === 1,
+    version: Number(version),
+  };
 };
 
-export const getPresenceStatus = async (userId, now = Date.now()) => {
-  const activeSockets = await runScript(
-    getStatusScript,
-    [redisKeys.presence.userSockets(userId), redisKeys.presence.users],
+export const getPresenceState = async (userId, now = Date.now()) => {
+  const [activeSockets, version, transitionedOffline] = await runScript(
+    getStateScript,
+    [
+      redisKeys.presence.userSockets(userId),
+      redisKeys.presence.users,
+      redisKeys.presence.versions,
+    ],
     [
       redisKeys.presence.socketPrefix(userId),
       userId,
@@ -135,18 +166,28 @@ export const getPresenceStatus = async (userId, now = Date.now()) => {
       now,
     ],
   );
-  return Number(activeSockets) > 0;
+  return {
+    isOnline: Number(activeSockets) > 0,
+    version: Number(version),
+    transitionedOffline: Number(transitionedOffline) === 1,
+  };
 };
+
+export const getPresenceStatus = async (userId, now = Date.now()) =>
+  (await getPresenceState(userId, now)).isOnline;
 
 export const getPresenceStatuses = async (userIds) => {
   const uniqueIds = [...new Set(userIds.map(String))];
   const statuses = await Promise.all(
-    uniqueIds.map(async (userId) => [userId, await getPresenceStatus(userId)]),
+    uniqueIds.map(async (userId) => [userId, await getPresenceState(userId)]),
   );
   return Object.fromEntries(
-    statuses.map(([userId, isOnline]) => [
+    statuses.map(([userId, state]) => [
       userId,
-      { status: isOnline ? "online" : "offline" },
+      {
+        status: state.isOnline ? "online" : "offline",
+        version: state.version,
+      },
     ]),
   );
 };
