@@ -19,6 +19,7 @@ import {
   PublicOnly,
   RequireOnboarding,
 } from "./components/RouteGuards.jsx";
+import RealtimeProvider from "./components/RealtimeProvider.jsx";
 
 const App = () => {
   const { isLoading, authUser } = useAuthUser();
@@ -27,89 +28,91 @@ const App = () => {
 
   return (
     <div className="h-full" data-theme={theme}>
-      <Routes>
-        <Route
-          path="/"
-          element={
-            <RequireOnboarding authUser={authUser}>
-              <Layout showSidebar={true}>
-                <HomePage />
-              </Layout>
-            </RequireOnboarding>
-          }
-        />
-        <Route
-          path="/login"
-          element={
-            <PublicOnly authUser={authUser}>
-              <LoginPage />
-            </PublicOnly>
-          }
-        />
-        <Route
-          path="/signup"
-          element={
-            <PublicOnly authUser={authUser}>
-              <SignUpPage />
-            </PublicOnly>
-          }
-        />
-        <Route
-          path="/call/:id"
-          element={
-            <RequireOnboarding authUser={authUser}>
-              <CallPage />
-            </RequireOnboarding>
-          }
-        />
-        <Route
-          path="/omegle"
-          element={
-            <RequireOnboarding authUser={authUser}>
-              <OmeglePage />
-            </RequireOnboarding>
-          }
-        />
-        <Route
-          path="/chat/:id"
-          element={
-            <RequireOnboarding authUser={authUser}>
-              <Layout showSidebar={false}>
-                <ChatPage />
-              </Layout>
-            </RequireOnboarding>
-          }
-        />
-        <Route
-          path="/notifications"
-          element={
-            <RequireOnboarding authUser={authUser}>
-              <Layout showSidebar={true}>
-                <NotificationsPage />
-              </Layout>
-            </RequireOnboarding>
-          }
-        />
-        <Route
-          path="/friends"
-          element={
-            <RequireOnboarding authUser={authUser}>
-              <Layout showSidebar={true}>
-                <FriendPage />
-              </Layout>
-            </RequireOnboarding>
-          }
-        />
-        <Route
-          path="/onboarding"
-          element={
-            <OnboardingOnly authUser={authUser}>
-              <OnboardingPage />
-            </OnboardingOnly>
-          }
-        />
-      </Routes>
-      <Toaster position="top-right" />
+      <RealtimeProvider key={authUser?._id || "anonymous"} userId={authUser?._id}>
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <RequireOnboarding authUser={authUser}>
+                <Layout showSidebar={true}>
+                  <HomePage />
+                </Layout>
+              </RequireOnboarding>
+            }
+          />
+          <Route
+            path="/login"
+            element={
+              <PublicOnly authUser={authUser}>
+                <LoginPage />
+              </PublicOnly>
+            }
+          />
+          <Route
+            path="/signup"
+            element={
+              <PublicOnly authUser={authUser}>
+                <SignUpPage />
+              </PublicOnly>
+            }
+          />
+          <Route
+            path="/call/:id"
+            element={
+              <RequireOnboarding authUser={authUser}>
+                <CallPage />
+              </RequireOnboarding>
+            }
+          />
+          <Route
+            path="/omegle"
+            element={
+              <RequireOnboarding authUser={authUser}>
+                <OmeglePage />
+              </RequireOnboarding>
+            }
+          />
+          <Route
+            path="/chat/:id"
+            element={
+              <RequireOnboarding authUser={authUser}>
+                <Layout showSidebar={false}>
+                  <ChatPage />
+                </Layout>
+              </RequireOnboarding>
+            }
+          />
+          <Route
+            path="/notifications"
+            element={
+              <RequireOnboarding authUser={authUser}>
+                <Layout showSidebar={true}>
+                  <NotificationsPage />
+                </Layout>
+              </RequireOnboarding>
+            }
+          />
+          <Route
+            path="/friends"
+            element={
+              <RequireOnboarding authUser={authUser}>
+                <Layout showSidebar={true}>
+                  <FriendPage />
+                </Layout>
+              </RequireOnboarding>
+            }
+          />
+          <Route
+            path="/onboarding"
+            element={
+              <OnboardingOnly authUser={authUser}>
+                <OnboardingPage />
+              </OnboardingOnly>
+            }
+          />
+        </Routes>
+        <Toaster position="top-right" />
+      </RealtimeProvider>
     </div>
   );
 };

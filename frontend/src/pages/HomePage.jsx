@@ -18,6 +18,7 @@ import { capitalize } from "../lib/utils.js";
 import FriendCard from "../components/FriendCard";
 import LanguageFlag from "../components/LanguageFlag";
 import NoFriendsFound from "../components/NoFriendsFound";
+import usePresenceSubscription from "../hooks/usePresenceSubscription.js";
 
 const HomePage = () => {
   const queryClient = useQueryClient();
@@ -25,6 +26,7 @@ const HomePage = () => {
     queryKey: ["friends"],
     queryFn: getUserFriends,
   });
+  usePresenceSubscription(friends);
 
   const { data: recommendedUsers = [], isLoading: loadingUsers } = useQuery({
     queryKey: ["users"],

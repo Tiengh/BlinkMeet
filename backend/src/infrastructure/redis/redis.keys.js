@@ -1,6 +1,7 @@
 import { redisConfig } from "./redis.config.js";
 
 const prefix = `${redisConfig.keyPrefix}:{matchmaking}`;
+const presencePrefix = `${redisConfig.keyPrefix}:{presence}`;
 
 export const redisKeys = {
   waiting: `${prefix}:waiting`,
@@ -11,4 +12,12 @@ export const redisKeys = {
   cancelledPrefix: `${prefix}:cancelled:`,
   matchPrefix: `${prefix}:match:`,
   prefix,
+  presence: {
+    users: `${presencePrefix}:users`,
+    userSockets: (userId) => `${presencePrefix}:user:${userId}:sockets`,
+    socket: (userId, socketId) =>
+      `${presencePrefix}:user:${userId}:socket:${socketId}`,
+    socketPrefix: (userId) => `${presencePrefix}:user:${userId}:socket:`,
+    prefix: presencePrefix,
+  },
 };
