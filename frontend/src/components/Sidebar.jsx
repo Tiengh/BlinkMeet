@@ -4,12 +4,9 @@ import { Link, useLocation } from "react-router";
 import {
   BellIcon,
   HomeIcon,
-  ShipWheelIcon,
-  User2Icon,
   UsersIcon,
   VideoIcon,
 } from "lucide-react";
-import MessengerLogo from "../public/icon.png";
 import BlinkMeetLogo from "../public/icon2.png";
 
 const Sidebar = () => {
@@ -18,8 +15,8 @@ const Sidebar = () => {
   const currentPath = location.pathname;
 
   return (
-    <aside className="w-64 bg-base-200 border-r border-base-300 hidden lg:flex flex-col h-full sticky top-0">
-      <div className="p-5 border-b border-base-300">
+    <aside className="hidden h-full w-64 shrink-0 flex-col border-r border-base-300 bg-base-200 lg:flex">
+      <div className="flex h-16 shrink-0 items-center border-b border-base-300 px-5">
         <Link to="/" className="flex items-center gap-2.5">
           <img
             src={BlinkMeetLogo}

@@ -30,6 +30,10 @@ import {
   refreshPresence,
 } from "../../modules/presence/presence.service.js";
 import { PRESENCE_SWEEP_INTERVAL } from "../../modules/presence/presence.constants.js";
+import {
+  configureChatEvents,
+  registerChatSocket,
+} from "../../modules/chat/chat.events.js";
 
 let io;
 let adapterClients = [];
@@ -47,6 +51,7 @@ export const initializeWebSocketServer = async (httpServer) => {
   io.use(createSocketAuthMiddleware());
   configureMatchmakingEvents(io);
   configurePresenceEvents(io);
+  configureChatEvents(io);
 
   presenceSweepTimer = setInterval(async () => {
     try {
@@ -84,6 +89,7 @@ export const initializeWebSocketServer = async (httpServer) => {
       getPresenceForUsers,
       refreshPresence,
     });
+    registerChatSocket(socket);
 
     socket.on("disconnect", (reason) => {
       console.info("Socket disconnected", {
@@ -106,4 +112,5 @@ export const closeWebSocketServer = async () => {
   adapterClients = [];
   io = undefined;
   configurePresenceEvents(null);
+  configureChatEvents(null);
 };
