@@ -85,10 +85,25 @@ const RealtimeProvider = ({ userId, children }) => {
         [String(changedUserId)]: { status, version },
       });
     };
+    const handleChatMessage = (message) => {
+      if (
+        !message?._id ||
+        String(message.recipient) !== String(userId)
+      ) {
+        return;
+      }
+
+      void emitWithAck(socket, "chat:delivered", {
+        messageId: String(message._id),
+      }).catch((error) => {
+        console.error("Could not mark incoming message as delivered:", error);
+      });
+    };
 
     socket.on("connect", handleConnect);
     socket.on("disconnect", handleDisconnect);
     socket.on("presence:changed", handlePresenceChanged);
+    socket.on("chat:message", handleChatMessage);
     socket.connect();
 
     return () => {
@@ -96,6 +111,7 @@ const RealtimeProvider = ({ userId, children }) => {
       socket.off("connect", handleConnect);
       socket.off("disconnect", handleDisconnect);
       socket.off("presence:changed", handlePresenceChanged);
+      socket.off("chat:message", handleChatMessage);
       socket.disconnect();
       if (socketRef.current === socket) {socketRef.current = null;}
       setSocket(null);

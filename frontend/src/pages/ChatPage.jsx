@@ -12,6 +12,7 @@ import { useNavigate, useParams } from "react-router";
 import ChatLoader from "../components/ChatLoader.jsx";
 import useAuthUser from "../hooks/useAuthUser.js";
 import useChatConversation from "../hooks/useChatConversation.js";
+import useRealtime from "../hooks/useRealtime.js";
 
 const MessageStatus = ({ status }) => {
   if (status === "seen") {
@@ -27,8 +28,12 @@ const ChatPage = () => {
   const { id: targetUserId } = useParams();
   const navigate = useNavigate();
   const { authUser } = useAuthUser();
+  const { presenceStatuses, subscribePresence } = useRealtime();
   const [draft, setDraft] = useState("");
+  const [retryClientMessageId, setRetryClientMessageId] = useState(null);
   const bottomRef = useRef(null);
+  const preserveScrollRef = useRef(null);
+  const scrollContainerRef = useRef(null);
   const {
     conversation,
     error,
@@ -47,6 +52,19 @@ const ChatPage = () => {
   } = useChatConversation({ currentUserId: authUser?._id, targetUserId });
 
   useEffect(() => {
+    if (!targetUserId) {return;}
+    void subscribePresence([targetUserId]).catch((presenceError) => {
+      console.error("Could not subscribe to chat peer presence:", presenceError);
+    });
+  }, [subscribePresence, targetUserId]);
+
+  useEffect(() => {
+    setDraft("");
+    setRetryClientMessageId(null);
+  }, [targetUserId]);
+
+  useEffect(() => {
+    if (preserveScrollRef.current) {return;}
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, isPeerTyping]);
 
@@ -54,14 +72,42 @@ const ChatPage = () => {
     event.preventDefault();
     const content = draft.trim();
     if (!content || isSending) {return;}
+    const clientMessageId = retryClientMessageId;
     setDraft("");
+    setRetryClientMessageId(null);
     setTyping(false);
     try {
-      await send(content);
+      await send(content, clientMessageId);
     } catch (sendError) {
       setDraft(content);
+      setRetryClientMessageId(sendError.clientMessageId || clientMessageId || null);
       toast.error(sendError.message || "Could not send message");
     }
+  };
+
+  const handleLoadOlder = async () => {
+    const container = scrollContainerRef.current;
+    if (!container || isLoadingOlder) {return;}
+
+    preserveScrollRef.current = {
+      height: container.scrollHeight,
+      top: container.scrollTop,
+    };
+    await loadOlder();
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const snapshot = preserveScrollRef.current;
+        const activeContainer = scrollContainerRef.current;
+        if (!snapshot || !activeContainer) {
+          preserveScrollRef.current = null;
+          return;
+        }
+        activeContainer.scrollTop =
+          snapshot.top + activeContainer.scrollHeight - snapshot.height;
+        preserveScrollRef.current = null;
+      });
+    });
   };
 
   const handleVideoCall = async () => {
@@ -98,6 +144,21 @@ const ChatPage = () => {
     );
   }
 
+  const peerPresence = presenceStatuses[String(targetUserId)]?.status || "offline";
+  const peerPresenceLabel = peerPresence.charAt(0).toUpperCase() + peerPresence.slice(1);
+  const statusText = !isConnected
+    ? "Reconnecting..."
+    : isPeerTyping
+      ? "Typing..."
+      : peerPresenceLabel;
+  const statusClass = !isConnected
+    ? "text-warning"
+    : peerPresence === "online"
+      ? "text-success"
+      : peerPresence === "away"
+        ? "text-warning"
+        : "opacity-60";
+
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-base-100">
       <header className="h-16 shrink-0 flex items-center gap-3 px-4 border-b border-base-300">
@@ -115,8 +176,8 @@ const ChatPage = () => {
         </div>
         <div className="min-w-0 flex-1">
           <p className="font-semibold truncate">{targetUser.user_name}</p>
-          <p className={`text-xs ${isConnected ? "text-success" : "text-warning"}`}>
-            {isPeerTyping ? "Typing..." : isConnected ? "Connected" : "Reconnecting..."}
+          <p className={`text-xs ${statusClass}`}>
+            {statusText}
           </p>
         </div>
         <button
@@ -129,13 +190,16 @@ const ChatPage = () => {
         </button>
       </header>
 
-      <main className="flex-1 overflow-y-auto px-4 py-5">
+      <main
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto px-4 py-5"
+      >
         <div className="max-w-3xl mx-auto space-y-3">
           {nextCursor && (
             <div className="text-center pb-2">
               <button
                 className="btn btn-ghost btn-sm"
-                onClick={loadOlder}
+                onClick={handleLoadOlder}
                 disabled={isLoadingOlder}
               >
                 {isLoadingOlder ? "Loading..." : "Load older messages"}
@@ -188,6 +252,7 @@ const ChatPage = () => {
             value={draft}
             onChange={(event) => {
               setDraft(event.target.value);
+              setRetryClientMessageId(null);
               setTyping(Boolean(event.target.value.trim()));
             }}
             placeholder={isConnected ? "Write a message..." : "Waiting for connection..."}
