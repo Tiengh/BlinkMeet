@@ -73,6 +73,9 @@ const RealtimeProvider = ({ userId, children }) => {
       void subscribePresence(requestedUserIdsRef.current).catch((error) => {
         console.error("Could not subscribe to friend presence:", error);
       });
+      void emitWithAck(socket, "chat:sync-delivered", {}).catch((error) => {
+        console.error("Could not reconcile pending chat deliveries:", error);
+      });
     };
     const handleDisconnect = () => setIsConnected(false);
     const handlePresenceChanged = ({

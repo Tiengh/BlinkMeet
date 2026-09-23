@@ -64,6 +64,22 @@ export const markMessageDelivered = (messageId, recipientId) =>
     { new: true },
   );
 
+export const findPendingDeliveryMessages = (recipientId) =>
+  Message.find({
+    recipient: recipientId,
+    status: "sent",
+  }).select("_id sender").lean();
+
+export const markPendingMessagesDelivered = (messageIds, recipientId) =>
+  Message.updateMany(
+    {
+      _id: { $in: messageIds },
+      recipient: recipientId,
+      status: "sent",
+    },
+    { status: "delivered" },
+  );
+
 export const findUnseenMessages = (conversationId, recipientId) =>
   Message.find({
     conversation: conversationId,

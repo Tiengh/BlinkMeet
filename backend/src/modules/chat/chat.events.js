@@ -1,5 +1,6 @@
 import {
   deliverMessage,
+  deliverPendingMessages,
   ensureCanChat,
   seeConversation,
   sendMessage,
@@ -40,6 +41,7 @@ export const emitMessageStatus = (userId, payload) => {
 export const registerChatSocket = (socket, dependencies = {}) => {
   const services = {
     deliverMessage,
+    deliverPendingMessages,
     ensureCanChat,
     seeConversation,
     sendMessage,
@@ -69,6 +71,25 @@ export const registerChatSocket = (socket, dependencies = {}) => {
         });
       }
       reply({ ok: true });
+    } catch (error) {
+      errorReply(reply, error);
+    }
+  });
+
+  socket.on("chat:sync-delivered", async (_payload = {}, acknowledge = () => {}) => {
+    const reply = typeof acknowledge === "function" ? acknowledge : () => {};
+    try {
+      const deliveries = await services.deliverPendingMessages(userId);
+      let deliveredCount = 0;
+      deliveries.forEach(({ senderId, messageIds }) => {
+        if (!messageIds.length) {return;}
+        deliveredCount += messageIds.length;
+        emitMessageStatus(senderId, {
+          messageIds,
+          status: "delivered",
+        });
+      });
+      reply({ ok: true, deliveredCount });
     } catch (error) {
       errorReply(reply, error);
     }

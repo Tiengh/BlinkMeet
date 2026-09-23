@@ -8,9 +8,11 @@ import {
   findMessages,
   findMessageById,
   findOrCreateConversation,
+  findPendingDeliveryMessages,
   findUnseenMessages,
   markMessageDelivered,
   markMessagesSeen,
+  markPendingMessagesDelivered,
   setLastMessage,
 } from "./chat.repository.js";
 import {
@@ -95,6 +97,28 @@ export const deliverMessage = async (recipientId, messageId) => {
   }
   if (existing.status !== "sent") {return null;}
   return markMessageDelivered(messageId, recipientId);
+};
+
+export const deliverPendingMessages = async (recipientId) => {
+  const normalizedRecipientId = parseUserId(recipientId, "recipientId");
+  const pending = await findPendingDeliveryMessages(normalizedRecipientId);
+  if (!pending.length) {return [];}
+
+  const messageIds = pending.map(({ _id }) => _id);
+  await markPendingMessagesDelivered(messageIds, normalizedRecipientId);
+
+  const bySender = new Map();
+  pending.forEach(({ _id, sender }) => {
+    const senderId = String(sender);
+    const ids = bySender.get(senderId) || [];
+    ids.push(String(_id));
+    bySender.set(senderId, ids);
+  });
+
+  return [...bySender.entries()].map(([senderId, deliveredMessageIds]) => ({
+    senderId,
+    messageIds: deliveredMessageIds,
+  }));
 };
 
 export const seeConversation = async (recipientId, conversationId) => {

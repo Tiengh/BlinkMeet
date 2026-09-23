@@ -56,6 +56,52 @@ test("chat send uses the authenticated socket identity", async () => {
   configureChatEvents(null);
 });
 
+test("delivery sync uses authenticated identity and notifies each sender", async () => {
+  const delivered = [];
+  configureChatEvents({
+    to: (room) => ({
+      emit: (event, payload) => delivered.push({ room, event, payload }),
+    }),
+  });
+  const { socket, handlers } = createSocket();
+  const calls = [];
+  registerChatSocket(socket, {
+    deliverPendingMessages: async (...args) => {
+      calls.push(args);
+      return [
+        { senderId: "friend-a", messageIds: ["message-1", "message-2"] },
+        { senderId: "friend-b", messageIds: ["message-3"] },
+      ];
+    },
+  });
+
+  const response = await new Promise((resolve) => {
+    handlers.get("chat:sync-delivered")({ recipientId: "forged-user" }, resolve);
+  });
+
+  assert.deepEqual(calls, [["authenticated-user"]]);
+  assert.deepEqual(response, { ok: true, deliveredCount: 3 });
+  assert.deepEqual(delivered, [
+    {
+      room: "user:friend-a",
+      event: "chat:status",
+      payload: {
+        messageIds: ["message-1", "message-2"],
+        status: "delivered",
+      },
+    },
+    {
+      room: "user:friend-b",
+      event: "chat:status",
+      payload: {
+        messageIds: ["message-3"],
+        status: "delivered",
+      },
+    },
+  ]);
+  configureChatEvents(null);
+});
+
 test("seen status is emitted only to the message sender", async () => {
   const delivered = [];
   configureChatEvents({
