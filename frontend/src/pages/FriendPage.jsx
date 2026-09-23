@@ -6,12 +6,14 @@ import { UsersIcon } from "lucide-react";
 
 import FriendCard from "../components/FriendCard";
 import NoFriendsFound from "../components/NoFriendsFound";
+import usePresenceSubscription from "../hooks/usePresenceSubscription.js";
 
 const FriendPage = () => {
   const { data: friends = [], isLoading: loadingFriends } = useQuery({
     queryKey: ["friends"],
     queryFn: getUserFriends,
   });
+  usePresenceSubscription(friends);
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">

@@ -16,9 +16,24 @@ import {
   parseOptionalCallId,
   parseSessionId,
 } from "../../modules/matchmaking/matchmaking.validation.js";
+import {
+  configurePresenceEvents,
+  emitPresenceChanged,
+  registerPresenceSocket,
+} from "../../modules/presence/presence.events.js";
+import {
+  connectPresence,
+  disconnectPresence,
+  findExpiredPresenceTransitions,
+  getAllowedFriendIds,
+  getPresenceForUsers,
+  refreshPresence,
+} from "../../modules/presence/presence.service.js";
+import { PRESENCE_SWEEP_INTERVAL } from "../../modules/presence/presence.constants.js";
 
 let io;
 let adapterClients = [];
+let presenceSweepTimer;
 
 export const initializeWebSocketServer = async (httpServer) => {
   io = new Server(httpServer, { cors: corsOptions });
@@ -31,6 +46,19 @@ export const initializeWebSocketServer = async (httpServer) => {
 
   io.use(createSocketAuthMiddleware());
   configureMatchmakingEvents(io);
+  configurePresenceEvents(io);
+
+  presenceSweepTimer = setInterval(async () => {
+    try {
+      const transitions = await findExpiredPresenceTransitions();
+      transitions.forEach(({ userId, status, version }) => {
+        emitPresenceChanged(userId, status, version);
+      });
+    } catch (error) {
+      console.error("Presence expiration sweep failed:", error);
+    }
+  }, PRESENCE_SWEEP_INTERVAL);
+  presenceSweepTimer.unref?.();
 
   io.on("connection", (socket) => {
     socket.join(`user:${socket.data.userId}`);
@@ -49,6 +77,13 @@ export const initializeWebSocketServer = async (httpServer) => {
         ),
       renewMatch,
     });
+    registerPresenceSocket(socket, {
+      connectPresence,
+      disconnectPresence,
+      getAllowedFriendIds,
+      getPresenceForUsers,
+      refreshPresence,
+    });
 
     socket.on("disconnect", (reason) => {
       console.info("Socket disconnected", {
@@ -63,9 +98,12 @@ export const initializeWebSocketServer = async (httpServer) => {
 };
 
 export const closeWebSocketServer = async () => {
+  if (presenceSweepTimer) {clearInterval(presenceSweepTimer);}
+  presenceSweepTimer = undefined;
   if (io) {await new Promise((resolve) => io.close(resolve));}
   await Promise.all(adapterClients.map((client) =>
     client.isOpen ? client.quit() : Promise.resolve()));
   adapterClients = [];
   io = undefined;
+  configurePresenceEvents(null);
 };

@@ -1,0 +1,3 @@
+export const PRESENCE_TTL = 60_000;
+export const PRESENCE_HEARTBEAT_INTERVAL = 20_000;
+export const PRESENCE_SWEEP_INTERVAL = 10_000;
