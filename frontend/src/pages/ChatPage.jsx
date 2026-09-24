@@ -1,129 +1,142 @@
-import React from "react";
-import toast from "react-hot-toast";
-
-import {
-  useNavigate,
-  useParams,
-} from "react-router";
-
-import useAuthUser from "../hooks/useAuthUser";
-
-import ChatLoader from "../components/ChatLoader";
-
 import {
   ArrowLeftIcon,
+  CheckCheckIcon,
+  CheckIcon,
   RefreshCcwIcon,
+  SendIcon,
+  VideoIcon,
 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import toast from "react-hot-toast";
+import { useNavigate, useParams } from "react-router";
+import ChatLoader from "../components/ChatLoader.jsx";
+import useAuthUser from "../hooks/useAuthUser.js";
+import useChatConversation from "../hooks/useChatConversation.js";
+import useRealtime from "../hooks/useRealtime.js";
 
-import {
-  Channel,
-  ChannelHeader,
-  Chat,
-  MessageInput,
-  MessageList,
-  Thread,
-  Window,
-} from "stream-chat-react";
-
-import CallButton from "../components/CallButton";
-import useStreamChat from "../hooks/useStreamChat";
+const MessageStatus = ({ status }) => {
+  if (status === "seen") {
+    return <CheckCheckIcon className="size-3.5 text-info" aria-label="Seen" />;
+  }
+  if (status === "delivered") {
+    return <CheckCheckIcon className="size-3.5" aria-label="Delivered" />;
+  }
+  return <CheckIcon className="size-3.5" aria-label="Sent" />;
+};
 
 const ChatPage = () => {
+  const { id: targetUserId } = useParams();
+  const navigate = useNavigate();
+  const { authUser } = useAuthUser();
+  const { presenceStatuses, subscribePresence } = useRealtime();
+  const [draft, setDraft] = useState("");
+  const [retryClientMessageId, setRetryClientMessageId] = useState(null);
+  const bottomRef = useRef(null);
+  const preserveScrollRef = useRef(null);
+  const scrollContainerRef = useRef(null);
   const {
-    id: targetUserId,
-  } = useParams();
-
-  const navigate =
-    useNavigate();
-
-  const {
-    authUser,
-  } = useAuthUser();
-
-  const {
-    client: chatClient,
-    channel,
+    conversation,
     error,
-    isLoading: loading,
-    retry: retryChat,
-  } = useStreamChat({ authUser, targetUserId });
+    isConnected,
+    isLoading,
+    isLoadingOlder,
+    isPeerTyping,
+    isSending,
+    loadOlder,
+    messages,
+    nextCursor,
+    retry,
+    send,
+    setTyping,
+    targetUser,
+  } = useChatConversation({ currentUserId: authUser?._id, targetUserId });
 
-  const handleVideoCall =
-    async () => {
-      if (!channel) {
-        return;
-      }
+  useEffect(() => {
+    if (!targetUserId) {return;}
+    void subscribePresence([targetUserId]).catch((presenceError) => {
+      console.error("Could not subscribe to chat peer presence:", presenceError);
+    });
+  }, [subscribePresence, targetUserId]);
 
-      try {
-        const callUrl =
-          `${window.location.origin}/call/${channel.id}`;
+  useEffect(() => {
+    setDraft("");
+    setRetryClientMessageId(null);
+  }, [targetUserId]);
 
-        await channel.sendMessage({
-          text:
-            `I've started a video call. Join here: ${callUrl}`,
-        });
+  useEffect(() => {
+    if (preserveScrollRef.current) {return;}
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length, isPeerTyping]);
 
-        toast.success(
-          "Video call link sent successfully!",
-        );
-      } catch (error) {
-        console.error(
-          "Error sending video call link:",
-          error,
-        );
-
-        toast.error(
-          "Could not send video call link.",
-        );
-      }
-    };
-
-  const handleRetry = () => {
-    retryChat();
+  const submitMessage = async (event) => {
+    event.preventDefault();
+    const content = draft.trim();
+    if (!content || isSending) {return;}
+    const clientMessageId = retryClientMessageId;
+    setDraft("");
+    setRetryClientMessageId(null);
+    setTyping(false);
+    try {
+      await send(content, clientMessageId);
+    } catch (sendError) {
+      setDraft(content);
+      setRetryClientMessageId(sendError.clientMessageId || clientMessageId || null);
+      toast.error(sendError.message || "Could not send message");
+    }
   };
 
-  if (loading) {
-    return <ChatLoader />;
-  }
+  const handleLoadOlder = async () => {
+    const container = scrollContainerRef.current;
+    if (!container || isLoadingOlder) {return;}
 
-  if (
-    error ||
-    !chatClient ||
-    !channel
-  ) {
+    preserveScrollRef.current = {
+      height: container.scrollHeight,
+      top: container.scrollTop,
+    };
+    await loadOlder();
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const snapshot = preserveScrollRef.current;
+        const activeContainer = scrollContainerRef.current;
+        if (!snapshot || !activeContainer) {
+          preserveScrollRef.current = null;
+          return;
+        }
+        activeContainer.scrollTop =
+          snapshot.top + activeContainer.scrollHeight - snapshot.height;
+        preserveScrollRef.current = null;
+      });
+    });
+  };
+
+  const handleVideoCall = async () => {
+    if (!conversation) {return;}
+    const callUrl = `${window.location.origin}/call/${conversation._id}`;
+    try {
+      await send(`I've started a video call. Join here: ${callUrl}`);
+      toast.success("Video call link sent successfully!");
+    } catch (sendError) {
+      toast.error(sendError.message || "Could not send video call link");
+    }
+  };
+
+  if (isLoading) {return <ChatLoader />;}
+
+  if (error || !conversation || !targetUser) {
     return (
-      <div className="h-[calc(100dvh-4rem)] overflow-hidden flex items-center justify-center">
+      <div className="h-[calc(100dvh-4rem)] flex items-center justify-center">
         <div className="text-center space-y-5">
-          <h2 className="text-xl font-semibold">
-            Could not connect
-            to chat
-          </h2>
-
+          <h2 className="text-xl font-semibold">Could not open this chat</h2>
           <p className="text-sm opacity-70">
-            Please try again.
+            {error?.response?.data?.message || "Please try again."}
           </p>
-
           <div className="flex gap-3 justify-center">
-            <button
-              className="btn btn-ghost"
-              onClick={() =>
-                navigate("/")
-              }
-            >
-              <ArrowLeftIcon className="w-4 h-4" />
-
-              Back
+            <button className="btn btn-ghost" onClick={() => navigate("/")}>
+              <ArrowLeftIcon className="size-4" /> Back
             </button>
-
-            <button
-              className="btn btn-primary"
-              onClick={
-                handleRetry
-              }
-            >
-              <RefreshCcwIcon className="w-4 h-4" />
-
-              Try Again
+            <button className="btn btn-primary" onClick={retry}>
+              <RefreshCcwIcon className="size-4" /> Try Again
             </button>
           </div>
         </div>
@@ -131,53 +144,134 @@ const ChatPage = () => {
     );
   }
 
+  const peerPresence = presenceStatuses[String(targetUserId)]?.status || "offline";
+  const peerPresenceLabel = peerPresence.charAt(0).toUpperCase() + peerPresence.slice(1);
+  const statusText = !isConnected
+    ? "Reconnecting..."
+    : isPeerTyping
+      ? "Typing..."
+      : peerPresenceLabel;
+  const statusClass = !isConnected
+    ? "text-warning"
+    : peerPresence === "online"
+      ? "text-success"
+      : peerPresence === "away"
+        ? "text-warning"
+        : "opacity-60";
+
   return (
-    <div className="h-[calc(100dvh-4rem)] overflow-hidden flex flex-col">
-      <div className="h-14 shrink-0 flex items-center gap-3 px-4 border-b border-base-300 bg-base-100">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-base-100">
+      <header className="h-16 shrink-0 flex items-center gap-3 px-4 border-b border-base-300">
         <button
           className="btn btn-ghost btn-circle"
-          onClick={() =>
-            navigate("/")
-          }
+          onClick={() => navigate("/")}
           aria-label="Back"
         >
-          <ArrowLeftIcon className="w-5 h-5" />
+          <ArrowLeftIcon className="size-5" />
         </button>
-
-        <span className="font-semibold">
-          Chat
-        </span>
-      </div>
-
-      <div className="flex-1 min-h-0 overflow-hidden">
-        <Chat
-          client={chatClient}
+        <div className="avatar">
+          <div className="size-10 rounded-full">
+            <img src={targetUser.user_profilePic} alt={targetUser.user_name} />
+          </div>
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="font-semibold truncate">{targetUser.user_name}</p>
+          <p className={`text-xs ${statusClass}`}>
+            {statusText}
+          </p>
+        </div>
+        <button
+          className="btn btn-ghost btn-circle text-success"
+          onClick={handleVideoCall}
+          disabled={!isConnected || isSending}
+          aria-label="Start video call"
         >
-          <Channel
-            channel={channel}
-          >
-            <div className="w-full h-full relative">
-              <CallButton
-                handleVideoCall={
-                  handleVideoCall
-                }
-              />
+          <VideoIcon className="size-5" />
+        </button>
+      </header>
 
-              <Window>
-                <ChannelHeader />
-
-                <MessageList />
-
-                <MessageInput
-                  focus
-                />
-              </Window>
+      <main
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto px-4 py-5"
+      >
+        <div className="max-w-3xl mx-auto space-y-3">
+          {nextCursor && (
+            <div className="text-center pb-2">
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={handleLoadOlder}
+                disabled={isLoadingOlder}
+              >
+                {isLoadingOlder ? "Loading..." : "Load older messages"}
+              </button>
             </div>
+          )}
 
-            <Thread />
-          </Channel>
-        </Chat>
-      </div>
+          {messages.length === 0 && (
+            <div className="text-center py-16 opacity-60">
+              <p className="font-medium">No messages yet</p>
+              <p className="text-sm">Say hello to {targetUser.user_name}.</p>
+            </div>
+          )}
+
+          {messages.map((message) => {
+            const isMine = message.sender === String(authUser?._id);
+            return (
+              <div
+                key={message._id}
+                className={`chat ${isMine ? "chat-end" : "chat-start"}`}
+              >
+                <div className={`chat-bubble break-words ${isMine ? "chat-bubble-primary" : ""}`}>
+                  {message.content}
+                </div>
+                <div className="chat-footer opacity-60 flex items-center gap-1 mt-1">
+                  <time>{new Date(message.createdAt).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}</time>
+                  {isMine && <MessageStatus status={message.status} />}
+                </div>
+              </div>
+            );
+          })}
+          {isPeerTyping && (
+            <div className="chat chat-start">
+              <div className="chat-bubble flex gap-1 items-center">
+                <span className="loading loading-dots loading-sm" />
+              </div>
+            </div>
+          )}
+          <div ref={bottomRef} />
+        </div>
+      </main>
+
+      <form className="shrink-0 border-t border-base-300 p-3" onSubmit={submitMessage}>
+        <div className="max-w-3xl mx-auto flex gap-2">
+          <input
+            className="input input-bordered flex-1"
+            value={draft}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              setRetryClientMessageId(null);
+              setTyping(Boolean(event.target.value.trim()));
+            }}
+            placeholder={isConnected ? "Write a message..." : "Waiting for connection..."}
+            maxLength={2000}
+            disabled={!isConnected}
+            autoFocus
+          />
+          <button
+            className="btn btn-primary btn-square"
+            type="submit"
+            disabled={!draft.trim() || !isConnected || isSending}
+            aria-label="Send message"
+          >
+            {isSending
+              ? <span className="loading loading-spinner loading-sm" />
+              : <SendIcon className="size-5" />}
+          </button>
+        </div>
+      </form>
     </div>
   );
 };

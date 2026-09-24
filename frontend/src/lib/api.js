@@ -72,6 +72,17 @@ export const getStreamToken = async () => {
   return response.data;
 };
 
+export const getConversationMessages = async (
+  targetUserId,
+  before = null,
+) => {
+  const response = await axiosInstance.get(
+    `/chat/conversations/${targetUserId}/messages`,
+    { params: before ? { before } : undefined },
+  );
+  return response.data;
+};
+
 export const startRandomSearch = async (
   excludeUserId = null,
   sessionId,
