@@ -33,27 +33,36 @@ const acquireLocalMedia = async () => {
     };
   }
 
-  const attempts = [
-    { audio: true, video: true },
-    { audio: true, video: false },
-    { audio: false, video: true },
-  ];
-  let lastError = null;
-  for (const constraints of attempts) {
-    try {
-      return {
-        stream: await navigator.mediaDevices.getUserMedia(constraints),
-        warning: lastError,
-      };
-    } catch (error) {
-      lastError = error;
-      if (error?.name === "NotAllowedError" || error?.name === "SecurityError") {
-        break;
+  try {
+    return {
+      stream: await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: true,
+      }),
+      warning: null,
+    };
+  } catch (combinedError) {
+    const tracks = [];
+    const errors = [combinedError];
+    const fallbacks = [
+      { audio: true, video: false },
+      { audio: false, video: true },
+    ];
+
+    for (const constraints of fallbacks) {
+      try {
+        const fallbackStream = await navigator.mediaDevices.getUserMedia(constraints);
+        tracks.push(...fallbackStream.getTracks());
+      } catch (error) {
+        errors.push(error);
       }
     }
-  }
 
-  return { stream: new MediaStream(), warning: lastError };
+    return {
+      stream: new MediaStream(tracks),
+      warning: tracks.length ? null : errors.at(-1),
+    };
+  }
 };
 
 const useWebRTC = ({
@@ -269,7 +278,7 @@ const useWebRTC = ({
           incomingStream.addTrack(sourceTrack);
         }
       });
-      setRemoteStream(incomingStream);
+      setRemoteStream(new MediaStream(incomingStream.getTracks()));
     };
     peerConnection.onconnectionstatechange = () => {
       const state = peerConnection.connectionState;

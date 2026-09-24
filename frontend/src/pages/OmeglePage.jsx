@@ -37,12 +37,10 @@ const OmeglePage = () => {
   });
 
   const leaveRandomCall = async () => {
-    webRTC.closeConnection({ stopLocalMedia: true });
     await handleLeaveCall();
   };
 
   const findNext = async () => {
-    webRTC.closeConnection();
     await handleNext(call?.peerId);
   };
 
