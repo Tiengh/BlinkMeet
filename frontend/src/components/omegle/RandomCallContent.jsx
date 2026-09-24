@@ -1,383 +1,197 @@
-import React, {
+import {
   useEffect,
   useRef,
 } from "react";
-
-import {
-  hasScreenShare,
-  ParticipantView,
-  ScreenShareButton,
-  SpeakingWhileMutedNotification,
-  StreamTheme,
-  ToggleAudioPublishingButton,
-  ToggleVideoPublishingButton,
-  useCall,
-  useCallStateHooks,
-} from "@stream-io/video-react-sdk";
-
 import {
   useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-
 import {
   CheckCircleIcon,
+  MicIcon,
+  MicOffIcon,
+  PhoneOffIcon,
   SkipForwardIcon,
   UserPlusIcon,
   UsersIcon,
-  PhoneOffIcon,
+  VideoIcon,
+  VideoOffIcon,
 } from "lucide-react";
-
 import toast from "react-hot-toast";
-
 import {
   getOutgoingFriendReqs,
   getUserFriends,
   sendFriendRequest,
 } from "../../lib/api";
-import { logRandomCall } from "../../lib/randomCallDebug";
 
-const PEER_JOIN_TIMEOUT = 12000;
-const PEER_DISCONNECT_GRACE = 4000;
+const VideoSurface = ({ muted = false, stream, label }) => {
+  const videoRef = useRef(null);
+  const hasVideo = Boolean(stream?.getVideoTracks().length);
+
+  useEffect(() => {
+    if (!videoRef.current) {return;}
+    videoRef.current.srcObject = stream || null;
+  }, [stream]);
+
+  return (
+    <div className="relative w-full md:w-1/2 h-full min-h-0 bg-black rounded-xl overflow-hidden flex items-center justify-center">
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted={muted}
+        className={`w-full h-full object-cover ${hasVideo ? "block" : "hidden"}`}
+      />
+      {!hasVideo && (
+        <div className="text-center text-white space-y-3 px-4">
+          <div className="avatar placeholder">
+            <div className="bg-neutral text-neutral-content rounded-full w-20">
+              <span className="text-2xl">{label.slice(0, 1)}</span>
+            </div>
+          </div>
+          <p>{label}</p>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const RandomCallContent = ({
-  onNext,
-  onPeerLeft,
-  onPeerJoinTimeout,
+  call,
+  connectionState,
+  hasCamera,
+  hasMicrophone,
+  isAudioEnabled,
+  isVideoEnabled,
+  localStream,
+  mediaReady,
+  mediaWarning,
   onLeaveCall,
+  onNext,
+  remoteStream,
+  toggleCamera,
+  toggleMicrophone,
 }) => {
-  const activeCall = useCall();
-  const callId = activeCall?.id ?? null;
-  const {
-    useLocalParticipant,
-    useRemoteParticipants,
-  } = useCallStateHooks();
-
-  const localParticipant = useLocalParticipant();
-  const remoteParticipants = useRemoteParticipants();
-
-  const remoteParticipant = remoteParticipants[0];
-  const remoteUserId = remoteParticipant?.userId;
-
-  const lastRemoteUserIdRef = useRef(null);
-  const hadRemoteParticipantRef = useRef(false);
-  const peerLeftHandledRef = useRef(false);
-  const peerJoinTimeoutHandledRef = useRef(false);
-
   const queryClient = useQueryClient();
-
-  const localTrackType =
-    localParticipant &&
-    hasScreenShare(localParticipant)
-      ? "screenShareTrack"
-      : "videoTrack";
-
-  const remoteTrackType =
-    remoteParticipant &&
-    hasScreenShare(remoteParticipant)
-      ? "screenShareTrack"
-      : "videoTrack";
-
-  useEffect(() => {
-    if (!remoteParticipant) {
-      return;
-    }
-
-    if (!hadRemoteParticipantRef.current) {
-      logRandomCall("peer-visible", { callId });
-    }
-    hadRemoteParticipantRef.current = true;
-    peerJoinTimeoutHandledRef.current = false;
-
-    lastRemoteUserIdRef.current = String(
-      remoteParticipant.userId,
-    );
-
-    peerLeftHandledRef.current = false;
-  }, [callId, remoteParticipant]);
-
-  useEffect(() => {
-    if (remoteParticipant) {
-      return;
-    }
-
-    if (hadRemoteParticipantRef.current) {
-      return;
-    }
-
-    if (peerJoinTimeoutHandledRef.current) {
-      return;
-    }
-
-    const startedAt = performance.now();
-    logRandomCall("peer-wait-start", {
-      callId,
-      timeoutMs: PEER_JOIN_TIMEOUT,
-    });
-    const timer = setTimeout(() => {
-      if (
-        hadRemoteParticipantRef.current ||
-        peerJoinTimeoutHandledRef.current
-      ) {
-        return;
-      }
-
-      peerJoinTimeoutHandledRef.current = true;
-      logRandomCall("peer-wait-timeout", {
-        callId,
-        elapsedMs: Math.round(performance.now() - startedAt),
-      });
-
-      onPeerJoinTimeout();
-    }, PEER_JOIN_TIMEOUT);
-
-    return () => {
-      clearTimeout(timer);
-      logRandomCall("peer-wait-end", {
-        callId,
-        elapsedMs: Math.round(performance.now() - startedAt),
-        peerVisible: hadRemoteParticipantRef.current,
-      });
-    };
-  }, [
-    callId,
-    remoteParticipant,
-    onPeerJoinTimeout,
-  ]);
-
-  useEffect(() => {
-    if (
-      !hadRemoteParticipantRef.current ||
-      remoteParticipants.length > 0 ||
-      peerLeftHandledRef.current
-    ) {
-      return;
-    }
-
-    const startedAt = performance.now();
-    logRandomCall("peer-disconnect-grace-start", {
-      callId,
-      graceMs: PEER_DISCONNECT_GRACE,
-    });
-
-    const timer = setTimeout(() => {
-      if (
-        remoteParticipants.length > 0 ||
-        peerLeftHandledRef.current
-      ) {
-        return;
-      }
-
-      peerLeftHandledRef.current = true;
-      logRandomCall("peer-left-detected", {
-        callId,
-        elapsedMs: Math.round(performance.now() - startedAt),
-      });
-
-      onPeerLeft(
-        lastRemoteUserIdRef.current,
-      );
-    }, PEER_DISCONNECT_GRACE);
-
-    return () => {
-      clearTimeout(timer);
-      logRandomCall("peer-disconnect-grace-end", {
-        callId,
-        elapsedMs: Math.round(performance.now() - startedAt),
-      });
-    };
-  }, [
-    callId,
-    remoteParticipants.length,
-    onPeerLeft,
-  ]);
-
-  const {
-    data: friends = [],
-  } = useQuery({
+  const remoteUserId = call.peerId;
+  const { data: friends = [] } = useQuery({
     queryKey: ["friends"],
     queryFn: getUserFriends,
   });
-
-  const {
-    data: outgoingFriendReqs = [],
-  } = useQuery({
+  const { data: outgoingFriendReqs = [] } = useQuery({
     queryKey: ["outgoingFriendReqs"],
     queryFn: getOutgoingFriendReqs,
   });
-
   const {
-    mutate: sendRequestMutation,
+    mutate: sendRequest,
     isPending,
   } = useMutation({
     mutationFn: sendFriendRequest,
-
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["outgoingFriendReqs"],
-      });
-
-      toast.success(
-        "Friend request sent",
-      );
+      queryClient.invalidateQueries({ queryKey: ["outgoingFriendReqs"] });
+      toast.success("Friend request sent");
     },
-
     onError: (error) => {
-      toast.error(
-        error.response?.data?.message ||
-        "Could not send friend request",
-      );
+      toast.error(error.response?.data?.message || "Could not send friend request");
     },
   });
 
-  const isAlreadyFriend =
-    !!remoteUserId &&
-    friends.some(
-      (friend) =>
-        String(friend._id) ===
-        String(remoteUserId),
-    );
-
-  const hasRequestBeenSent =
-    !!remoteUserId &&
-    outgoingFriendReqs.some(
-      (request) =>
-        String(request.recipient?._id) ===
-        String(remoteUserId),
-    );
-
-  const handleSendRequest = () => {
-    if (
-      !remoteUserId ||
-      isAlreadyFriend ||
-      hasRequestBeenSent ||
-      isPending
-    ) {
-      return;
-    }
-
-    sendRequestMutation(remoteUserId);
-  };
-
-  const handleNextClick = () => {
-    onNext(
-      remoteUserId ||
-      lastRemoteUserIdRef.current,
-    );
-  };
+  const isAlreadyFriend = friends.some((friend) =>
+    String(friend._id) === String(remoteUserId));
+  const hasRequestBeenSent = outgoingFriendReqs.some((request) =>
+    String(request.recipient?._id) === String(remoteUserId));
+  const isConnected = connectionState === "connected";
 
   return (
-    <StreamTheme>
-      <div className="h-[calc(100dvh-4rem)] overflow-hidden bg-[#fdf2e9] flex flex-col items-center px-4 py-5 gap-4">
-        <h1 className="text-4xl font-bold text-orange-500 shrink-0">
-          Random Call
-        </h1>
-
-        <div className="flex-1 min-h-0 flex flex-col md:flex-row gap-6 w-full max-w-[1280px] justify-center">
-          <div className="w-full md:w-1/2 h-full min-h-0 bg-black rounded-xl overflow-hidden flex items-center justify-center">
-            {localParticipant ? (
-              <ParticipantView
-                participant={localParticipant}
-                trackType={localTrackType}
-              />
-            ) : (
-              <div className="text-center text-white">
-                <span className="loading loading-spinner mb-3" />
-
-                <p>
-                  Loading your media...
-                </p>
-              </div>
-            )}
-          </div>
-
-          <div className="w-full md:w-1/2 h-full min-h-0 bg-black rounded-xl overflow-hidden flex items-center justify-center">
-            {remoteParticipant ? (
-              <ParticipantView
-                participant={remoteParticipant}
-                trackType={remoteTrackType}
-              />
-            ) : (
-              <div className="text-center text-white space-y-3">
-                <span className="loading loading-spinner loading-lg" />
-
-                <p>
-                  Connecting to stranger...
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="shrink-0 flex gap-3 flex-wrap justify-center">
-          <button
-            className="flex items-center gap-2 bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded font-semibold transition-colors"
-            onClick={handleNextClick}
-          >
-            <SkipForwardIcon className="w-4 h-4" />
-            Next
-          </button>
-
-          <button
-            onClick={handleSendRequest}
-            disabled={
-              !remoteUserId ||
-              isAlreadyFriend ||
-              hasRequestBeenSent ||
-              isPending
-            }
-            className={`flex items-center px-6 py-2 rounded font-semibold transition-colors duration-200 ${
-              isAlreadyFriend
-                ? "bg-green-200 text-green-800 cursor-not-allowed"
-                : hasRequestBeenSent
-                  ? "bg-gray-300 text-gray-700 cursor-not-allowed"
-                  : !remoteUserId
-                    ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                    : "bg-purple-500 hover:bg-purple-600 text-white"
-            }`}
-          >
-            {isAlreadyFriend ? (
-              <>
-                <UsersIcon className="w-4 h-4 mr-2" />
-                Already Friend
-              </>
-            ) : hasRequestBeenSent ? (
-              <>
-                <CheckCircleIcon className="w-4 h-4 mr-2" />
-                Request Sent
-              </>
-            ) : isPending ? (
-              <>
-                <span className="loading loading-spinner loading-xs mr-2" />
-                Sending...
-              </>
-            ) : (
-              <>
-                <UserPlusIcon className="w-4 h-4 mr-2" />
-                Add Friend
-              </>
-            )}
-          </button>
-        </div>
-
-        <div className="shrink-0 str-video__call-controls">
-          <SpeakingWhileMutedNotification>
-            <ToggleAudioPublishingButton />
-          </SpeakingWhileMutedNotification>
-          <ToggleVideoPublishingButton />
-          <ScreenShareButton />
-          <button
-            type="button"
-            className="str-video__call-controls__button"
-            aria-label="Leave call"
-            onClick={onLeaveCall}
-          >
-            <PhoneOffIcon className="w-5 h-5" />
-          </button>
-        </div>
+    <div className="h-[calc(100dvh-4rem)] overflow-hidden bg-[#fdf2e9] flex flex-col items-center px-4 py-5 gap-4">
+      <div className="shrink-0 text-center">
+        <h1 className="text-4xl font-bold text-orange-500">Random Call</h1>
+        <p className="text-sm text-gray-500 mt-1">
+          {isConnected ? "Connected peer-to-peer" : "Establishing secure connection..."}
+        </p>
       </div>
-    </StreamTheme>
+
+      {mediaWarning && mediaReady && !hasCamera && !hasMicrophone && (
+        <div className="alert alert-warning py-2 max-w-[1280px]">
+          Camera and microphone are unavailable. You can still stay in the call.
+        </div>
+      )}
+
+      <div className="flex-1 min-h-0 flex flex-col md:flex-row gap-6 w-full max-w-[1280px] justify-center">
+        <VideoSurface
+          muted
+          stream={localStream}
+          label={mediaReady ? "You — camera off" : "Loading your media..."}
+        />
+        <VideoSurface
+          stream={remoteStream}
+          label={isConnected ? "Stranger — camera off" : "Connecting to stranger..."}
+        />
+      </div>
+
+      <div className="shrink-0 flex gap-3 flex-wrap justify-center">
+        <button
+          type="button"
+          className="flex items-center gap-2 bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded font-semibold transition-colors"
+          onClick={onNext}
+        >
+          <SkipForwardIcon className="w-4 h-4" />
+          Next
+        </button>
+        <button
+          type="button"
+          onClick={() => sendRequest(remoteUserId)}
+          disabled={isAlreadyFriend || hasRequestBeenSent || isPending}
+          className={`flex items-center px-6 py-2 rounded font-semibold transition-colors ${
+            isAlreadyFriend
+              ? "bg-green-200 text-green-800 cursor-not-allowed"
+              : hasRequestBeenSent
+                ? "bg-gray-300 text-gray-700 cursor-not-allowed"
+                : "bg-purple-500 hover:bg-purple-600 text-white"
+          }`}
+        >
+          {isAlreadyFriend ? (
+            <><UsersIcon className="w-4 h-4 mr-2" />Already Friend</>
+          ) : hasRequestBeenSent ? (
+            <><CheckCircleIcon className="w-4 h-4 mr-2" />Request Sent</>
+          ) : isPending ? (
+            <><span className="loading loading-spinner loading-xs mr-2" />Sending...</>
+          ) : (
+            <><UserPlusIcon className="w-4 h-4 mr-2" />Add Friend</>
+          )}
+        </button>
+      </div>
+
+      <div className="shrink-0 flex gap-3 justify-center">
+        <button
+          type="button"
+          className={`btn btn-circle ${isAudioEnabled ? "btn-neutral" : "btn-error"}`}
+          onClick={toggleMicrophone}
+          disabled={!hasMicrophone}
+          aria-label={isAudioEnabled ? "Mute microphone" : "Unmute microphone"}
+        >
+          {isAudioEnabled ? <MicIcon /> : <MicOffIcon />}
+        </button>
+        <button
+          type="button"
+          className={`btn btn-circle ${isVideoEnabled ? "btn-neutral" : "btn-error"}`}
+          onClick={toggleCamera}
+          disabled={!hasCamera}
+          aria-label={isVideoEnabled ? "Turn camera off" : "Turn camera on"}
+        >
+          {isVideoEnabled ? <VideoIcon /> : <VideoOffIcon />}
+        </button>
+        <button
+          type="button"
+          className="btn btn-circle btn-error"
+          aria-label="Leave call"
+          onClick={onLeaveCall}
+        >
+          <PhoneOffIcon />
+        </button>
+      </div>
+    </div>
   );
 };
 
