@@ -7,6 +7,7 @@ import authRoutes from "./modules/auth/auth.routes.js";
 import userRoutes from "./modules/user/user.routes.js";
 import friendRoutes from "./modules/friend/friend.routes.js";
 import chatRoutes from "./modules/chat/chat.routes.js";
+import callRoutes from "./modules/call/call.routes.js";
 import matchmakingRoutes from "./modules/matchmaking/matchmaking.routes.js";
 import { errorMiddleware } from "./middleware/error.middleware.js";
 import { corsOptions } from "./shared/cors.config.js";
@@ -22,6 +23,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/user", friendRoutes);
 app.use("/api/chat", chatRoutes);
+app.use("/api/call", callRoutes);
 app.use("/api/omegle", matchmakingRoutes);
 
 app.get("/api/health", (req, res) => {
