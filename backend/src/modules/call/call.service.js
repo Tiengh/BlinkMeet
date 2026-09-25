@@ -4,9 +4,54 @@ import { getMatch } from "../matchmaking/matchmaking.repository.js";
 import {
   DEFAULT_STUN_URLS,
   DEFAULT_TURN_CREDENTIAL_TTL_SECONDS,
+  LOCAL_TURN_SHARED_SECRET,
   MAX_TURN_CREDENTIAL_TTL_SECONDS,
   MIN_TURN_CREDENTIAL_TTL_SECONDS,
 } from "./call.constants.js";
+
+const LOCAL_TURN_HOSTS = new Set([
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "host.docker.internal",
+  "coturn",
+]);
+const LOOPBACK_EXTERNAL_IPS = new Set([
+  "localhost",
+  "127.0.0.1",
+  "::1",
+]);
+const ICE_SERVER_URL_PATTERN = /^(stuns?|turns?):(\[[^\]]+\]|[^:?\s]+)(?::(\d{1,5}))?(?:\?([^\s]+))?$/i;
+
+const parseIceServerUrl = (url, allowedProtocols) => {
+  const match = ICE_SERVER_URL_PATTERN.exec(url);
+  if (!match) {
+    throw new Error(`Invalid WebRTC ICE server URL: ${url}`);
+  }
+
+  const protocol = `${match[1].toLowerCase()}:`;
+  if (!allowedProtocols.includes(protocol)) {
+    throw new Error(`Invalid WebRTC ICE server URL: ${url}`);
+  }
+
+  const port = match[3] ? Number(match[3]) : null;
+  if (port !== null && (port < 1 || port > 65_535)) {
+    throw new Error(`Invalid WebRTC ICE server port: ${url}`);
+  }
+
+  const query = match[4] || "";
+  if (query) {
+    const isTurn = protocol === "turn:" || protocol === "turns:";
+    if (!isTurn || !/^transport=(udp|tcp)$/i.test(query)) {
+      throw new Error(`Invalid WebRTC ICE server query: ${url}`);
+    }
+  }
+
+  return {
+    host: match[2].replace(/^\[|\]$/g, "").toLowerCase(),
+    protocol,
+  };
+};
 
 const parseUrls = (value, allowedProtocols, fallback = []) => {
   const urls = String(value || "")
@@ -16,9 +61,7 @@ const parseUrls = (value, allowedProtocols, fallback = []) => {
   const result = urls.length ? [...new Set(urls)] : [...fallback];
 
   for (const url of result) {
-    if (!allowedProtocols.some((protocol) => url.startsWith(protocol))) {
-      throw new Error(`Invalid WebRTC ICE server URL: ${url}`);
-    }
+    parseIceServerUrl(url, allowedProtocols);
   }
   return result;
 };
@@ -49,6 +92,33 @@ const parseIceTransportPolicy = (value) => {
   return policy;
 };
 
+const validateTurnDeployment = ({ env, sharedSecret, turnUrls }) => {
+  if (!turnUrls.length) {
+    return;
+  }
+
+  const usesPublicTurnHost = turnUrls.some((url) => {
+    const { host } = parseIceServerUrl(url, ["turn:", "turns:"]);
+    return !LOCAL_TURN_HOSTS.has(host);
+  });
+  if (!usesPublicTurnHost) {
+    return;
+  }
+
+  const externalIp = String(env.TURN_EXTERNAL_IP || "").trim().toLowerCase();
+  if (!externalIp || LOOPBACK_EXTERNAL_IPS.has(externalIp)) {
+    throw new Error(
+      "TURN_EXTERNAL_IP must be configured with the public TURN address " +
+      "when WEBRTC_TURN_URLS points to a non-local host",
+    );
+  }
+  if (sharedSecret === LOCAL_TURN_SHARED_SECRET) {
+    throw new Error(
+      "The local TURN shared secret cannot be used with a public TURN server",
+    );
+  }
+};
+
 export const createIceConfiguration = (
   userId,
   { env = process.env, now = Date.now() } = {},
@@ -71,12 +141,14 @@ export const createIceConfiguration = (
   let credentialExpiresAt = null;
 
   if (turnUrls.length) {
-    const sharedSecret = env.TURN_SHARED_SECRET;
+    const sharedSecret = String(env.TURN_SHARED_SECRET || "").trim();
     if (!sharedSecret) {
       throw new Error(
         "TURN_SHARED_SECRET is required when WEBRTC_TURN_URLS is configured",
       );
     }
+    validateTurnDeployment({ env, sharedSecret, turnUrls });
+
     const ttl = parseCredentialTtl(env.TURN_CREDENTIAL_TTL_SECONDS);
     const expiresAtSeconds = Math.floor(now / 1_000) + ttl;
     const username = `${expiresAtSeconds}:${normalizedUserId}`;

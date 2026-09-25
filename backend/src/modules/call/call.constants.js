@@ -17,3 +17,4 @@ export const DEFAULT_STUN_URLS = Object.freeze([
 export const DEFAULT_TURN_CREDENTIAL_TTL_SECONDS = 3_600;
 export const MIN_TURN_CREDENTIAL_TTL_SECONDS = 60;
 export const MAX_TURN_CREDENTIAL_TTL_SECONDS = 86_400;
+export const LOCAL_TURN_SHARED_SECRET = "blinkmeet-local-turn-secret";

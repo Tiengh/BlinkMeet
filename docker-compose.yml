@@ -34,9 +34,13 @@ services:
 
     environment:
       REDIS_URL: redis://redis:6379
+      # Local defaults are intentionally limited to same-machine development.
+      # For cross-network testing configure TURN_PUBLIC_HOST,
+      # TURN_EXTERNAL_IP and a non-default TURN_SHARED_SECRET explicitly.
       WEBRTC_STUN_URLS: stun:${TURN_PUBLIC_HOST:-localhost}:3478
       WEBRTC_TURN_URLS: turn:${TURN_PUBLIC_HOST:-localhost}:3478?transport=udp,turn:${TURN_PUBLIC_HOST:-localhost}:3478?transport=tcp
       WEBRTC_ICE_TRANSPORT_POLICY: ${WEBRTC_ICE_TRANSPORT_POLICY:-all}
+      TURN_EXTERNAL_IP: ${TURN_EXTERNAL_IP:-127.0.0.1}
       TURN_SHARED_SECRET: ${TURN_SHARED_SECRET:-blinkmeet-local-turn-secret}
       TURN_CREDENTIAL_TTL_SECONDS: ${TURN_CREDENTIAL_TTL_SECONDS:-3600}
 
