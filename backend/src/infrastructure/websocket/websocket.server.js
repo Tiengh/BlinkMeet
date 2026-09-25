@@ -34,6 +34,10 @@ import {
   configureChatEvents,
   registerChatSocket,
 } from "../../modules/chat/chat.events.js";
+import {
+  configureCallEvents,
+  registerCallSocket,
+} from "../../modules/call/call.events.js";
 
 let io;
 let adapterClients = [];
@@ -50,6 +54,7 @@ export const initializeWebSocketServer = async (httpServer) => {
 
   io.use(createSocketAuthMiddleware());
   configureMatchmakingEvents(io);
+  configureCallEvents(io);
   configurePresenceEvents(io);
   configureChatEvents(io);
 
@@ -90,6 +95,7 @@ export const initializeWebSocketServer = async (httpServer) => {
       refreshPresence,
     });
     registerChatSocket(socket);
+    registerCallSocket(socket);
 
     socket.on("disconnect", (reason) => {
       console.info("Socket disconnected", {
@@ -113,4 +119,5 @@ export const closeWebSocketServer = async () => {
   io = undefined;
   configurePresenceEvents(null);
   configureChatEvents(null);
+  configureCallEvents(null);
 };

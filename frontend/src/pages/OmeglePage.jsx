@@ -1,14 +1,7 @@
 import React from "react";
 import { useNavigate } from "react-router";
-
-import {
-  StreamCall,
-  StreamVideo,
-} from "@stream-io/video-react-sdk";
-
-import "@stream-io/video-react-sdk/dist/css/styles.css";
-
 import useAuthUser from "../hooks/useAuthUser";
+import useWebRTC from "../hooks/useWebRTC";
 import useRandomCall from "../hooks/useRandomCall";
 
 import Layout from "../components/Layout.jsx";
@@ -21,19 +14,35 @@ const OmeglePage = () => {
   const navigate = useNavigate();
 
   const {
-    videoClient,
     call,
     phase,
     isLoading,
     handleNext,
     handleFindNext,
-    handlePeerLeft,
-    handlePeerJoinTimeout,
     handleLeaveCall,
+    handleConnectionFailure,
+    isSocketConnected,
+    socket,
   } = useRandomCall({
     authUser,
     onLeave: () => navigate("/"),
   });
+
+  const webRTC = useWebRTC({
+    call,
+    isSocketConnected,
+    localUserId: authUser?._id,
+    onConnectionFailure: handleConnectionFailure,
+    socket,
+  });
+
+  const leaveRandomCall = async () => {
+    await handleLeaveCall();
+  };
+
+  const findNext = async () => {
+    await handleNext(call?.peerId);
+  };
 
   if (isLoading) {
     return <PageLoader />;
@@ -53,16 +62,12 @@ const OmeglePage = () => {
 
   return (
     <Layout showSidebar={false}>
-      <StreamVideo client={videoClient}>
-        <StreamCall call={call}>
-          <RandomCallContent
-            onNext={handleNext}
-            onPeerLeft={handlePeerLeft}
-            onPeerJoinTimeout={handlePeerJoinTimeout}
-            onLeaveCall={handleLeaveCall}
-          />
-        </StreamCall>
-      </StreamVideo>
+      <RandomCallContent
+        {...webRTC}
+        call={call}
+        onNext={findNext}
+        onLeaveCall={leaveRandomCall}
+      />
     </Layout>
   );
 };
