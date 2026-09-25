@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { getWebRTCIceConfiguration } from "../lib/api";
 import { emitWithAck } from "../lib/realtime";
 import {
   describeRandomCallError,
@@ -13,16 +14,31 @@ import {
 const PEER_JOIN_TIMEOUT = 12_000;
 const PEER_DISCONNECT_GRACE = 4_000;
 
-const parseIceServers = () => {
-  const configured = import.meta.env.VITE_WEBRTC_ICE_SERVERS;
-  if (!configured) {return [];}
-  try {
-    const iceServers = JSON.parse(configured);
-    return Array.isArray(iceServers) ? iceServers : [];
-  } catch (error) {
-    console.error("Invalid VITE_WEBRTC_ICE_SERVERS:", error);
-    return [];
-  }
+const getSelectedConnectionRoute = async (peerConnection) => {
+  const stats = await peerConnection.getStats();
+  const reports = [...stats.values()];
+  const transport = reports.find((report) =>
+    report.type === "transport" && report.selectedCandidatePairId);
+  const candidatePair = transport
+    ? stats.get(transport.selectedCandidatePairId)
+    : reports.find((report) =>
+      report.type === "candidate-pair" &&
+      report.nominated &&
+      report.state === "succeeded");
+
+  if (!candidatePair) {return null;}
+  const localCandidate = stats.get(candidatePair.localCandidateId);
+  const remoteCandidate = stats.get(candidatePair.remoteCandidateId);
+  const usesRelay = localCandidate?.candidateType === "relay" ||
+    remoteCandidate?.candidateType === "relay";
+
+  return {
+    route: usesRelay ? "relay" : "direct",
+    localCandidateType: localCandidate?.candidateType ?? "unknown",
+    remoteCandidateType: remoteCandidate?.candidateType ?? "unknown",
+    protocol: localCandidate?.protocol ?? "unknown",
+    relayProtocol: localCandidate?.relayProtocol ?? null,
+  };
 };
 
 const acquireLocalMedia = async () => {
@@ -79,14 +95,73 @@ const useWebRTC = ({
   const [isAudioEnabled, setIsAudioEnabled] = useState(false);
   const [isVideoEnabled, setIsVideoEnabled] = useState(false);
   const [mediaReady, setMediaReady] = useState(false);
+  const [iceConfiguration, setIceConfiguration] = useState(null);
+  const [iceConfigurationError, setIceConfigurationError] = useState(null);
+  const [connectionRoute, setConnectionRoute] = useState(null);
 
   const localStreamRef = useRef(null);
   const activeConnectionRef = useRef(null);
   const failureCallbackRef = useRef(onConnectionFailure);
+  const configurationFailureCallIdRef = useRef(null);
 
   useEffect(() => {
     failureCallbackRef.current = onConnectionFailure;
   }, [onConnectionFailure]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!call) {
+      setIceConfiguration(null);
+      setIceConfigurationError(null);
+      setConnectionRoute(null);
+      return undefined;
+    }
+
+    const callId = call.callId;
+    setIceConfiguration(null);
+    setIceConfigurationError(null);
+    setConnectionRoute(null);
+
+    void getWebRTCIceConfiguration()
+      .then((configuration) => {
+        if (cancelled) {return;}
+        if (
+          !Array.isArray(configuration?.iceServers) ||
+          !["all", "relay"].includes(configuration?.iceTransportPolicy)
+        ) {
+          throw new Error("Backend returned an invalid ICE configuration");
+        }
+        setIceConfiguration({ ...configuration, callId });
+        logRandomCall("webrtc-ice-config-loaded", {
+          callId,
+          iceTransportPolicy: configuration.iceTransportPolicy,
+          turnEnabled: configuration.iceServers.some((server) => {
+            const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+            return urls.some((url) => String(url).startsWith("turn"));
+          }),
+        });
+      })
+      .catch((error) => {
+        if (cancelled) {return;}
+        setIceConfigurationError(error);
+        setConnectionState("failed");
+        logRandomCall("webrtc-ice-config-error", {
+          callId,
+          ...describeRandomCallError(error),
+        });
+        if (configurationFailureCallIdRef.current !== callId) {
+          configurationFailureCallIdRef.current = callId;
+          failureCallbackRef.current?.({
+            callId,
+            connected: false,
+            peerId: call.peerId,
+            reason: "ice-configuration-failed",
+          });
+        }
+      });
+
+    return () => {cancelled = true;};
+  }, [call]);
 
   useEffect(() => {
     let cancelled = false;
@@ -115,6 +190,7 @@ const useWebRTC = ({
     activeConnectionRef.current = null;
     setRemoteStream(null);
     setConnectionState("closed");
+    setConnectionRoute(null);
     if (stopLocalMedia) {
       localStreamRef.current?.getTracks().forEach((track) => track.stop());
       localStreamRef.current = null;
@@ -131,13 +207,15 @@ const useWebRTC = ({
       !localUserId ||
       !mediaReady ||
       !localStream ||
-      !socket
+      !socket ||
+      iceConfiguration?.callId !== call.callId
     ) {
       return;
     }
 
     const peerConnection = new RTCPeerConnection({
-      iceServers: parseIceServers(),
+      iceServers: iceConfiguration.iceServers,
+      iceTransportPolicy: iceConfiguration.iceTransportPolicy,
     });
     const incomingStream = new MediaStream();
     const pendingCandidates = [];
@@ -182,6 +260,7 @@ const useWebRTC = ({
       clearTimeout(joinTimer);
       clearTimeout(disconnectTimer);
       peerConnection.onicecandidate = null;
+      peerConnection.onicecandidateerror = null;
       peerConnection.ontrack = null;
       peerConnection.onconnectionstatechange = null;
       peerConnection.close();
@@ -200,6 +279,7 @@ const useWebRTC = ({
     }
     setRemoteStream(incomingStream);
     setConnectionState("connecting");
+    setConnectionRoute(null);
 
     const flushCandidates = async () => {
       while (pendingCandidates.length) {
@@ -271,6 +351,14 @@ const useWebRTC = ({
         logRandomCall("webrtc-ice-error", describeRandomCallError(error));
       });
     };
+    peerConnection.onicecandidateerror = (event) => {
+      logRandomCall("webrtc-ice-candidate-error", {
+        callId: call.callId,
+        errorCode: event.errorCode,
+        errorText: event.errorText,
+        url: event.url,
+      });
+    };
     peerConnection.ontrack = ({ streams, track }) => {
       const sourceTracks = streams[0]?.getTracks() || [track];
       sourceTracks.forEach((sourceTrack) => {
@@ -289,6 +377,21 @@ const useWebRTC = ({
         clearTimeout(joinTimer);
         clearTimeout(disconnectTimer);
         logRandomCall("webrtc-connected", { callId: call.callId });
+        void getSelectedConnectionRoute(peerConnection)
+          .then((routeDetails) => {
+            if (closed || !routeDetails) {return;}
+            setConnectionRoute(routeDetails.route);
+            logRandomCall("webrtc-route-selected", {
+              callId: call.callId,
+              ...routeDetails,
+            });
+          })
+          .catch((error) => {
+            logRandomCall(
+              "webrtc-route-inspection-error",
+              describeRandomCallError(error),
+            );
+          });
       } else if (state === "disconnected") {
         clearTimeout(disconnectTimer);
         disconnectTimer = setTimeout(() => {
@@ -325,6 +428,7 @@ const useWebRTC = ({
     };
   }, [
     call,
+    iceConfiguration,
     isSocketConnected,
     localStream,
     localUserId,
@@ -350,11 +454,13 @@ const useWebRTC = ({
 
   return {
     closeConnection,
+    connectionRoute,
     connectionState,
     hasCamera: Boolean(localStream?.getVideoTracks().length),
     hasMicrophone: Boolean(localStream?.getAudioTracks().length),
     isAudioEnabled,
     isVideoEnabled,
+    iceConfigurationError,
     localStream,
     mediaReady,
     mediaWarning,
