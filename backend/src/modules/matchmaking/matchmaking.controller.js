@@ -1,11 +1,15 @@
 import { getStatus, leave, search } from "./matchmaking.service.js";
-import { parseOptionalCallId, parseSessionId } from "./matchmaking.validation.js";
+import {
+  parseOptionalCallId,
+  parseOptionalUserId,
+  parseSessionId,
+} from "./matchmaking.validation.js";
 
 export async function searchRandomCall(req, res, next) {
   try {
     const result = await search(
       req.user._id.toString(),
-      req.body?.excludeUserId,
+      parseOptionalUserId(req.body?.excludeUserId, "excludeUserId"),
       parseSessionId(req.body?.sessionId),
     );
     res.status(200).json(result);

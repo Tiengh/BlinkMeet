@@ -1,15 +1,24 @@
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 import User from "../modules/user/user.model.js";
 import { UnauthorizedError } from "../shared/errors/unauthorized.error.js";
 
 export const protectRoute = async (req, res, next) => {
   try {
-    const token = req.cookies.jwt;
+    const token = req.cookies?.jwt;
     if (!token) {
       throw new UnauthorizedError("Unauthorized - No token provided");
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET_KEY);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET_KEY, {
+      algorithms: ["HS256"],
+    });
+    if (
+      typeof decoded.userId !== "string" ||
+      !mongoose.isObjectIdOrHexString(decoded.userId)
+    ) {
+      throw new UnauthorizedError("Unauthorized - Invalid token");
+    }
     const user = await User.findById(decoded.userId).select("-user_password");
 
     if (!user) {

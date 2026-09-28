@@ -1,11 +1,8 @@
-import mongoose from "mongoose";
 import { BadRequestError } from "../../shared/errors/bad-request.error.js";
+import { parseObjectId } from "../../shared/validation.js";
 
 export const parseUserId = (value, fieldName = "userId") => {
-  if (!mongoose.isValidObjectId(value)) {
-    throw new BadRequestError(`${fieldName} is invalid`);
-  }
-  return String(value);
+  return parseObjectId(value, fieldName);
 };
 
 export const parseMessageContent = (value) => {
@@ -38,8 +35,5 @@ export const parseHistoryLimit = (value) => {
 
 export const parseMessageCursor = (value) => {
   if (value === undefined) {return null;}
-  if (!mongoose.isValidObjectId(value)) {
-    throw new BadRequestError("before cursor is invalid");
-  }
-  return String(value);
+  return parseObjectId(value, "before cursor");
 };

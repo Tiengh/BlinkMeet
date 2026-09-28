@@ -2,7 +2,13 @@ import { createAdapter } from "@socket.io/redis-adapter";
 import { Server } from "socket.io";
 import { getRedisClient } from "../redis/redis.client.js";
 import { corsOptions } from "../../shared/cors.config.js";
+import { securityConfig } from "../../shared/security.config.js";
 import { createSocketAuthMiddleware } from "./socket.auth.js";
+import {
+  createSocketConnectionRateLimitMiddleware,
+  createSocketEventRateLimitMiddleware,
+  createSocketIpConnectionRateLimitMiddleware,
+} from "./socket.rate-limit.js";
 import {
   configureMatchmakingEvents,
   registerMatchmakingSocket,
@@ -44,7 +50,10 @@ let adapterClients = [];
 let presenceSweepTimer;
 
 export const initializeWebSocketServer = async (httpServer) => {
-  io = new Server(httpServer, { cors: corsOptions });
+  io = new Server(httpServer, {
+    cors: corsOptions,
+    maxHttpBufferSize: securityConfig.socketMaxPayloadBytes,
+  });
 
   const publisher = getRedisClient().duplicate();
   const subscriber = publisher.duplicate();
@@ -52,7 +61,9 @@ export const initializeWebSocketServer = async (httpServer) => {
   adapterClients = [publisher, subscriber];
   io.adapter(createAdapter(publisher, subscriber));
 
+  io.use(createSocketIpConnectionRateLimitMiddleware());
   io.use(createSocketAuthMiddleware());
+  io.use(createSocketConnectionRateLimitMiddleware());
   configureMatchmakingEvents(io);
   configureCallEvents(io);
   configurePresenceEvents(io);
@@ -72,6 +83,7 @@ export const initializeWebSocketServer = async (httpServer) => {
 
   io.on("connection", (socket) => {
     socket.join(`user:${socket.data.userId}`);
+    socket.use(createSocketEventRateLimitMiddleware(socket));
     console.info("Socket connected", {
       socketId: socket.id,
       userId: socket.data.userId,
