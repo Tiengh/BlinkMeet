@@ -34,6 +34,15 @@ services:
 
     environment:
       REDIS_URL: redis://redis:6379
+      # Local defaults are intentionally limited to same-machine development.
+      # For cross-network testing configure TURN_PUBLIC_HOST,
+      # TURN_EXTERNAL_IP and a non-default TURN_SHARED_SECRET explicitly.
+      WEBRTC_STUN_URLS: stun:${TURN_PUBLIC_HOST:-localhost}:3478
+      WEBRTC_TURN_URLS: turn:${TURN_PUBLIC_HOST:-localhost}:3478?transport=udp,turn:${TURN_PUBLIC_HOST:-localhost}:3478?transport=tcp
+      WEBRTC_ICE_TRANSPORT_POLICY: ${WEBRTC_ICE_TRANSPORT_POLICY:-all}
+      TURN_EXTERNAL_IP: ${TURN_EXTERNAL_IP:-127.0.0.1}
+      TURN_SHARED_SECRET: ${TURN_SHARED_SECRET:-blinkmeet-local-turn-secret}
+      TURN_CREDENTIAL_TTL_SECONDS: ${TURN_CREDENTIAL_TTL_SECONDS:-3600}
 
     volumes:
       - ./backend:/app
@@ -44,6 +53,39 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      coturn:
+        condition: service_healthy
+
+  coturn:
+    image: coturn/coturn:4.18.0-r0
+    container_name: blinkmeet-coturn
+    command:
+      - -n
+      - --log-file=stdout
+      - --pidfile=/tmp/turnserver.pid
+      - --fingerprint
+      - --use-auth-secret
+      - --static-auth-secret=${TURN_SHARED_SECRET:-blinkmeet-local-turn-secret}
+      - --realm=${TURN_REALM:-blinkmeet.local}
+      - --external-ip=${TURN_EXTERNAL_IP:-127.0.0.1}
+      - --min-port=49160
+      - --max-port=49200
+      - --stale-nonce=600
+      - --user-quota=4
+      - --total-quota=100
+      - --no-multicast-peers
+      - --prometheus
+    ports:
+      - "3478:3478"
+      - "3478:3478/udp"
+      - "49160-49200:49160-49200/udp"
+      - "127.0.0.1:9641:9641"
+    healthcheck:
+      test: ["CMD-SHELL", "turnutils_stunclient 127.0.0.1 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
   mongo:
     image: mongo:8

@@ -59,11 +59,13 @@ const VideoSurface = ({ muted = false, stream, label }) => {
 
 const RandomCallContent = ({
   call,
+  connectionRoute,
   connectionState,
   hasCamera,
   hasMicrophone,
   isAudioEnabled,
   isVideoEnabled,
+  iceConfigurationError,
   localStream,
   mediaReady,
   mediaWarning,
@@ -102,15 +104,26 @@ const RandomCallContent = ({
   const hasRequestBeenSent = outgoingFriendReqs.some((request) =>
     String(request.recipient?._id) === String(remoteUserId));
   const isConnected = connectionState === "connected";
+  const connectionLabel = connectionRoute === "relay"
+    ? "Connected through TURN relay"
+    : connectionRoute === "direct"
+      ? "Connected peer-to-peer"
+      : "Connected";
 
   return (
     <div className="h-[calc(100dvh-4rem)] overflow-hidden bg-[#fdf2e9] flex flex-col items-center px-4 py-5 gap-4">
       <div className="shrink-0 text-center">
         <h1 className="text-4xl font-bold text-orange-500">Random Call</h1>
         <p className="text-sm text-gray-500 mt-1">
-          {isConnected ? "Connected peer-to-peer" : "Establishing secure connection..."}
+          {isConnected ? connectionLabel : "Establishing secure connection..."}
         </p>
       </div>
+
+      {iceConfigurationError && (
+        <div className="alert alert-error py-2 max-w-[1280px]">
+          Could not load the secure network configuration.
+        </div>
+      )}
 
       {mediaWarning && mediaReady && !hasCamera && !hasMicrophone && (
         <div className="alert alert-warning py-2 max-w-[1280px]">

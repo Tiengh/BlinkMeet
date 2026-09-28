@@ -72,6 +72,11 @@ export const getStreamToken = async () => {
   return response.data;
 };
 
+export const getWebRTCIceConfiguration = async () => {
+  const response = await axiosInstance.get("/call/ice-servers");
+  return response.data;
+};
+
 export const getConversationMessages = async (
   targetUserId,
   before = null,
