@@ -11,13 +11,13 @@ test("socket authentication rejects a connection without the JWT cookie", async 
   const socket = { handshake: { headers: {} }, data: {} };
   const error = await runMiddleware(createSocketAuthMiddleware({
     jwtSecret: "test-secret",
-    findUser: async () => ({ _id: "user-a" }),
+    findUser: async () => ({ _id: "507f1f77bcf86cd799439011" }),
   }), socket);
   assert.equal(error?.data?.code, "UNAUTHORIZED");
 });
 
 test("socket authentication derives user identity from a valid JWT cookie", async () => {
-  const token = jwt.sign({ userId: "user-a" }, "test-secret", { expiresIn: "1m" });
+  const token = jwt.sign({ userId: "507f1f77bcf86cd799439011" }, "test-secret", { expiresIn: "1m" });
   const socket = {
     handshake: { headers: { cookie: `theme=dark; jwt=${token}` } },
     data: {},
@@ -27,7 +27,7 @@ test("socket authentication derives user identity from a valid JWT cookie", asyn
     findUser: async (userId) => ({ _id: userId, user_name: "A" }),
   }), socket);
   assert.equal(error, undefined);
-  assert.equal(socket.data.userId, "user-a");
+  assert.equal(socket.data.userId, "507f1f77bcf86cd799439011");
   assert.equal(socket.data.user.user_name, "A");
 });
 
@@ -38,7 +38,7 @@ test("socket authentication rejects an invalid JWT", async () => {
   };
   const error = await runMiddleware(createSocketAuthMiddleware({
     jwtSecret: "test-secret",
-    findUser: async () => ({ _id: "user-a" }),
+    findUser: async () => ({ _id: "507f1f77bcf86cd799439011" }),
   }), socket);
   assert.equal(error?.data?.code, "UNAUTHORIZED");
 });

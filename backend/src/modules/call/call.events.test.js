@@ -31,8 +31,8 @@ test("offer signaling uses authenticated identity and authorized peer", async ()
 
   const response = await new Promise((resolve) => {
     handlers.get("call:offer")({
-      callId: "call-1",
-      peerId: "peer-user",
+      callId: "omegle-123e4567-e89b-12d3-a456-426614174000",
+      peerId: "507f1f77bcf86cd799439012",
       sessionId: "session-1",
       description: { type: "offer", sdp: "test-sdp" },
       fromUserId: "forged-user",
@@ -42,10 +42,10 @@ test("offer signaling uses authenticated identity and authorized peer", async ()
   assert.equal(response.ok, true);
   assert.equal(authorizations[0][0], "authenticated-user");
   assert.deepEqual(delivered, [{
-    room: "user:peer-user",
+    room: "user:507f1f77bcf86cd799439012",
     event: "call:offer",
     payload: {
-      callId: "call-1",
+      callId: "omegle-123e4567-e89b-12d3-a456-426614174000",
       fromUserId: "authenticated-user",
       description: { type: "offer", sdp: "test-sdp" },
     },
@@ -62,8 +62,8 @@ test("invalid ICE candidates are rejected before authorization", async () => {
 
   const response = await new Promise((resolve) => {
     handlers.get("call:ice-candidate")({
-      callId: "call-1",
-      peerId: "peer-user",
+      callId: "omegle-123e4567-e89b-12d3-a456-426614174000",
+      peerId: "507f1f77bcf86cd799439012",
       sessionId: "session-1",
       candidate: null,
     }, resolve);

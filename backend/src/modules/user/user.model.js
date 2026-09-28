@@ -3,14 +3,14 @@ import bcrypt from "bcryptjs";
 
 const userSchema = new mongoose.Schema(
   {
-    user_name: { type: String, required: true },
-    user_email: { type: String, required: true },
+    user_name: { type: String, required: true, minlength: 2, maxlength: 80 },
+    user_email: { type: String, required: true, unique: true, index: true },
     user_password: { type: String, required: true, minlength: 8, select: false },
-    user_bio: { type: String, default: "" },
-    user_profilePic: { type: String, default: "" },
-    user_nativeLanguage: { type: String, default: "" },
-    user_learningLanguage: { type: String, default: "" },
-    user_location: { type: String, default: "" },
+    user_bio: { type: String, maxlength: 500, default: "" },
+    user_profilePic: { type: String, maxlength: 2_048, default: "" },
+    user_nativeLanguage: { type: String, maxlength: 50, default: "" },
+    user_learningLanguage: { type: String, maxlength: 50, default: "" },
+    user_location: { type: String, maxlength: 120, default: "" },
     user_isOnboarded: { type: Boolean, default: false },
     user_friends: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   },

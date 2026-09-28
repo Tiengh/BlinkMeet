@@ -1,4 +1,6 @@
 import { BadRequestError } from "../../shared/errors/bad-request.error.js";
+import { parseObjectId } from "../../shared/validation.js";
+import { parseSessionId } from "../matchmaking/matchmaking.validation.js";
 import {
   MAX_ICE_CANDIDATE_LENGTH,
   MAX_SDP_LENGTH,
@@ -12,11 +14,17 @@ const requiredString = (value, name, maxLength = 256) => {
   return normalized;
 };
 
-export const parseCallIdentity = (payload = {}) => ({
-  callId: requiredString(payload.callId, "callId"),
-  peerId: requiredString(payload.peerId, "peerId"),
-  sessionId: requiredString(payload.sessionId, "sessionId", 128),
-});
+export const parseCallIdentity = (payload = {}) => {
+  const callId = requiredString(payload.callId, "callId");
+  if (!/^omegle-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(callId)) {
+    throw new BadRequestError("Invalid callId");
+  }
+  return {
+    callId,
+    peerId: parseObjectId(payload.peerId, "peerId"),
+    sessionId: parseSessionId(payload.sessionId),
+  };
+};
 
 export const parseDescription = (payload, expectedType) => {
   const identity = parseCallIdentity(payload);

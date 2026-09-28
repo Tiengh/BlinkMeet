@@ -1,4 +1,4 @@
-import { setAuthCookie } from "./auth.cookie.js";
+import { clearAuthCookie, setAuthCookie } from "./auth.cookie.js";
 import { loginUser, onboardUser, signupUser } from "./auth.service.js";
 
 export async function signup(req, res, next) {
@@ -22,7 +22,7 @@ export async function login(req, res, next) {
 }
 
 export function logout(req, res) {
-  res.clearCookie("jwt");
+  clearAuthCookie(res);
   res.status(200).json({ success: true, message: "Logout successful" });
 }
 

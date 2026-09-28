@@ -49,18 +49,18 @@ test("presence subscription authorizes, joins rooms, then reads snapshot", async
     getAllowedFriendIds: async (userId, requestedIds) => {
       operations.push("authorize");
       requestedBy.push([userId, requestedIds]);
-      return ["friend-a"];
+      return ["507f1f77bcf86cd799439011"];
     },
     getPresenceForUsers: async (friendIds) => {
       operations.push("snapshot");
-      assert.deepEqual(friendIds, ["friend-a"]);
-      return { "friend-a": { status: "online", version: 7 } };
+      assert.deepEqual(friendIds, ["507f1f77bcf86cd799439011"]);
+      return { "507f1f77bcf86cd799439011": { status: "online", version: 7 } };
     },
   });
 
   const response = await new Promise((resolve) => {
     handlers.get("presence:subscribe")(
-      { userId: "forged-user", userIds: ["friend-a", "stranger"] },
+      { userId: "forged-user", userIds: ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439013"] },
       resolve,
     );
   });
@@ -68,16 +68,16 @@ test("presence subscription authorizes, joins rooms, then reads snapshot", async
 
   assert.deepEqual(requestedBy, [[
     "authenticated-user",
-    ["friend-a", "stranger"],
+    ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439013"],
   ]]);
-  assert.deepEqual(joined, ["presence:watch:friend-a"]);
+  assert.deepEqual(joined, ["presence:watch:507f1f77bcf86cd799439011"]);
   assert.deepEqual(operations, [
     "authorize",
-    "join:presence:watch:friend-a",
+    "join:presence:watch:507f1f77bcf86cd799439011",
     "snapshot",
   ]);
   assert.equal(response.ok, true);
-  assert.deepEqual(response.statuses["friend-a"], {
+  assert.deepEqual(response.statuses["507f1f77bcf86cd799439011"], {
     status: "online",
     version: 7,
   });
@@ -108,20 +108,20 @@ test("presence subscriptions are serialized per socket", async () => {
   });
 
   const firstResponse = new Promise((resolve) => {
-    handlers.get("presence:subscribe")({ userIds: ["friend-a"] }, resolve);
+    handlers.get("presence:subscribe")({ userIds: ["507f1f77bcf86cd799439011"] }, resolve);
   });
   const secondResponse = new Promise((resolve) => {
-    handlers.get("presence:subscribe")({ userIds: ["friend-b"] }, resolve);
+    handlers.get("presence:subscribe")({ userIds: ["507f1f77bcf86cd799439012"] }, resolve);
   });
 
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(authorizeCalls, [["friend-a"]]);
+  assert.deepEqual(authorizeCalls, [["507f1f77bcf86cd799439011"]]);
 
   releaseFirst();
   await Promise.all([firstResponse, secondResponse]);
   handlers.get("disconnect")();
 
-  assert.deepEqual(authorizeCalls, [["friend-a"], ["friend-b"]]);
+  assert.deepEqual(authorizeCalls, [["507f1f77bcf86cd799439011"], ["507f1f77bcf86cd799439012"]]);
 });
 
 test("disconnect emits versioned offline only when the last socket leaves", async () => {
