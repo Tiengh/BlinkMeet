@@ -1,4 +1,13 @@
 export const errorMiddleware = (error, req, res, _next) => {
+  if (error?.code === 11000) {
+    const fields = Object.keys(error.keyPattern || error.keyValue || {});
+    return res.status(409).json({
+      success: false,
+      message: "Resource already exists",
+      details: fields.length ? { fields } : undefined,
+    });
+  }
+
   if (error?.statusCode) {
     if (error.statusCode >= 500) {
       console.error("Unhandled app error:", error);

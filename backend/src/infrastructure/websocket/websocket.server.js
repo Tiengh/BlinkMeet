@@ -7,6 +7,7 @@ import { createSocketAuthMiddleware } from "./socket.auth.js";
 import {
   createSocketConnectionRateLimitMiddleware,
   createSocketEventRateLimitMiddleware,
+  createSocketIpConnectionRateLimitMiddleware,
 } from "./socket.rate-limit.js";
 import {
   configureMatchmakingEvents,
@@ -60,6 +61,7 @@ export const initializeWebSocketServer = async (httpServer) => {
   adapterClients = [publisher, subscriber];
   io.adapter(createAdapter(publisher, subscriber));
 
+  io.use(createSocketIpConnectionRateLimitMiddleware());
   io.use(createSocketAuthMiddleware());
   io.use(createSocketConnectionRateLimitMiddleware());
   configureMatchmakingEvents(io);

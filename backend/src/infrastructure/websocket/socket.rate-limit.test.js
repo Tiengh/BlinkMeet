@@ -3,7 +3,29 @@ import { test } from "node:test";
 import {
   createSocketConnectionRateLimitMiddleware,
   createSocketEventRateLimitMiddleware,
+  createSocketIpConnectionRateLimitMiddleware,
 } from "./socket.rate-limit.js";
+
+test("socket IP connection limiter runs before authentication identity exists", async () => {
+  const calls = [];
+  const middleware = createSocketIpConnectionRateLimitMiddleware({
+    policy: { limit: 10, windowMs: 60_000 },
+    consume: async (input) => {
+      calls.push(input);
+      return { allowed: true, retryAfterMs: 60_000 };
+    },
+  });
+  const error = await new Promise((resolve) => {
+    middleware({
+      data: {},
+      handshake: { address: "203.0.113.8" },
+    }, resolve);
+  });
+
+  assert.equal(error, undefined);
+  assert.equal(calls[0].identity, "203.0.113.8");
+  assert.equal(calls[0].scope, "socket:connection:ip");
+});
 
 test("socket connection limiter uses authenticated user identity", async () => {
   const calls = [];

@@ -23,6 +23,32 @@ const socketError = (message, code, details = {}) => {
   return error;
 };
 
+const socketIpAddress = (socket) => String(
+  socket.handshake?.address || socket.request?.socket?.remoteAddress || "unknown",
+);
+
+export const createSocketIpConnectionRateLimitMiddleware = ({
+  consume = consumeRateLimit,
+  policy = securityConfig.rateLimits.socketIpConnection,
+} = {}) => async (socket, next) => {
+  try {
+    const result = await consume({
+      scope: "socket:connection:ip",
+      identity: socketIpAddress(socket),
+      ...policy,
+    });
+    if (!result.allowed) {
+      next(socketError("Too many socket connection attempts", "RATE_LIMITED", {
+        retryAfterMs: result.retryAfterMs,
+      }));
+      return;
+    }
+    next();
+  } catch {
+    next(socketError("Realtime security service unavailable", "SERVICE_UNAVAILABLE"));
+  }
+};
+
 export const createSocketConnectionRateLimitMiddleware = ({
   consume = consumeRateLimit,
   policy = securityConfig.rateLimits.socketConnection,

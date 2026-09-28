@@ -4,7 +4,13 @@ import bcrypt from "bcryptjs";
 const userSchema = new mongoose.Schema(
   {
     user_name: { type: String, required: true, minlength: 2, maxlength: 80 },
-    user_email: { type: String, required: true, unique: true, index: true },
+    user_email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+    },
     user_password: { type: String, required: true, minlength: 8, select: false },
     user_bio: { type: String, maxlength: 500, default: "" },
     user_profilePic: { type: String, maxlength: 2_048, default: "" },
