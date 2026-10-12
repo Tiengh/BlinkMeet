@@ -4,6 +4,8 @@ const prefix = `${redisConfig.keyPrefix}:{matchmaking}`;
 const presencePrefix = `${redisConfig.keyPrefix}:{presence}`;
 
 export const redisKeys = {
+  rateLimit: (scope, identityHash) =>
+    `${redisConfig.keyPrefix}:rate-limit:${scope}:${identityHash}`,
   waiting: `${prefix}:waiting`,
   waitingUser: (userId) => `${prefix}:user:${userId}`,
   match: (userId) => `${prefix}:match:${userId}`,

@@ -5,20 +5,21 @@ import { NotFoundError } from "../../shared/errors/not-found.error.js";
 import { UnauthorizedError } from "../../shared/errors/unauthorized.error.js";
 import { toPublicUser } from "./auth.mapper.js";
 import { createUser, findUserByEmail, updateUser } from "./auth.repository.js";
+import {
+  parseLoginInput,
+  parseOnboardingInput,
+  parseSignupInput,
+} from "./auth.validation.js";
 
 const createToken = (userId) =>
-  jwt.sign({ userId }, process.env.JWT_SECRET_KEY, { expiresIn: "7d" });
+  jwt.sign({ userId }, process.env.JWT_SECRET_KEY, {
+    algorithm: "HS256",
+    expiresIn: "7d",
+  });
 
-export async function signupUser({ email, password, name }) {
-  if (!email || !password || !name) {
-    throw new BadRequestError("All fields are required");
-  }
-  if (password.length < 8) {
-    throw new BadRequestError("Password must be at least 8 characters");
-  }
-  if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email)) {
-    throw new BadRequestError("Invalid email format");
-  }
+export async function signupUser(input = {}) {
+  let { email, password, name } = input;
+  ({ email, password, name } = parseSignupInput({ email, password, name }));
   if (await findUserByEmail(email)) {
     throw new BadRequestError("Already existed, use a different email");
   }
@@ -35,32 +36,28 @@ export async function signupUser({ email, password, name }) {
   return { user: toPublicUser(user), token: createToken(user._id) };
 }
 
-export async function loginUser({ email, password }) {
-  if (!email || !password) {
-    throw new BadRequestError("All fields are required");
-  }
+export async function loginUser(input = {}) {
+  let { email, password } = input;
+  ({ email, password } = parseLoginInput({ email, password }));
 
   const user = await findUserByEmail(email);
-  if (!user) {throw new UnauthorizedError("Invalid email");}
+  if (!user) {throw new UnauthorizedError("Invalid email or password");}
   if (!(await user.matchPassword(password))) {
-    throw new UnauthorizedError("Invalid password");
+    throw new UnauthorizedError("Invalid email or password");
   }
 
   return { user: toPublicUser(user), token: createToken(user._id) };
 }
 
 export async function onboardUser(userId, data) {
-  const { name, bio, nativeLanguage, learningLanguage, location } = data;
-  const missingFields = [];
-  if (!name) {missingFields.push("name");}
-  if (!bio) {missingFields.push("bio");}
-  if (!nativeLanguage) {missingFields.push("nativeLanguage");}
-  if (!learningLanguage) {missingFields.push("learningLanguage");}
-  if (!location) {missingFields.push("location");}
-
-  if (missingFields.length) {
-    throw new BadRequestError("All fields are required", missingFields);
-  }
+  const {
+    name,
+    bio,
+    nativeLanguage,
+    learningLanguage,
+    location,
+    profilePic,
+  } = parseOnboardingInput(data);
 
   const user = await updateUser(userId, {
     user_name: name,
@@ -68,6 +65,7 @@ export async function onboardUser(userId, data) {
     user_nativeLanguage: nativeLanguage,
     user_learningLanguage: learningLanguage,
     user_location: location,
+    user_profilePic: profilePic,
     user_isOnboarded: true,
   });
   if (!user) {throw new NotFoundError("User not found");}

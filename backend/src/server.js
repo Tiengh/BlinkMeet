@@ -5,11 +5,13 @@ import { connectMongoDB } from "./infrastructure/database/mongodb.js";
 import { connectRedis } from "./infrastructure/redis/redis.client.js";
 import { initStreamClient } from "./lib/stream.js";
 import { initializeWebSocketServer } from "./infrastructure/websocket/websocket.server.js";
+import { validateSecurityEnvironment } from "./shared/security.config.js";
 
 const PORT = process.env.PORT || 3000;
 
 const startServer = async () => {
   try {
+    validateSecurityEnvironment();
     await connectMongoDB();
     await connectRedis();
     initStreamClient();

@@ -2,6 +2,7 @@ import "dotenv/config";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
+import helmet from "helmet";
 import path from "path";
 import authRoutes from "./modules/auth/auth.routes.js";
 import userRoutes from "./modules/user/user.routes.js";
@@ -11,12 +12,27 @@ import callRoutes from "./modules/call/call.routes.js";
 import matchmakingRoutes from "./modules/matchmaking/matchmaking.routes.js";
 import { errorMiddleware } from "./middleware/error.middleware.js";
 import { corsOptions } from "./shared/cors.config.js";
+import { securityConfig } from "./shared/security.config.js";
 
 const app = express();
 const __dirname = path.resolve();
 
+app.disable("x-powered-by");
+app.set("query parser", "simple");
+app.set("trust proxy", securityConfig.trustProxy);
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      connectSrc: ["'self'", "https:", "wss:"],
+      imgSrc: ["'self'", "data:", "blob:", "https:"],
+      mediaSrc: ["'self'", "blob:"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https:"],
+      workerSrc: ["'self'", "blob:"],
+    },
+  },
+}));
 app.use(cors(corsOptions));
-app.use(express.json());
+app.use(express.json({ limit: securityConfig.requestBodyLimit }));
 app.use(cookieParser());
 
 app.use("/api/auth", authRoutes);

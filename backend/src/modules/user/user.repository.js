@@ -4,6 +4,7 @@ export const findRecommendedUsers = (userId, friendIds) =>
   User.aggregate([
     { $match: { _id: { $ne: userId, $nin: friendIds }, user_isOnboarded: true } },
     { $sample: { size: 20 } },
+    { $project: { user_password: 0, __v: 0 } },
   ]);
 
 export const findUserFriends = (userId) =>

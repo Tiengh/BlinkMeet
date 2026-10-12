@@ -1,5 +1,6 @@
 import { parse as parseCookie } from "cookie";
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 import User from "../../modules/user/user.model.js";
 
 const unauthorized = (message) => {
@@ -20,7 +21,14 @@ export const createSocketAuthMiddleware = ({
       return;
     }
 
-    const decoded = jwt.verify(token, jwtSecret);
+    const decoded = jwt.verify(token, jwtSecret, { algorithms: ["HS256"] });
+    if (
+      typeof decoded.userId !== "string" ||
+      !mongoose.isObjectIdOrHexString(decoded.userId)
+    ) {
+      next(unauthorized("Unauthorized - Invalid token"));
+      return;
+    }
     const user = await findUser(decoded.userId);
     if (!user) {
       next(unauthorized("Unauthorized - User not found"));

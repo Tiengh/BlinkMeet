@@ -1,4 +1,5 @@
 import { PRESENCE_HEARTBEAT_INTERVAL } from "./presence.constants.js";
+import { parseObjectId } from "../../shared/validation.js";
 
 let socketServer;
 
@@ -22,7 +23,9 @@ const parseRequestedUserIds = (payload) => {
   if (!Array.isArray(payload.userIds) || payload.userIds.length > 200) {
     throw new Error("userIds must be an array with at most 200 entries");
   }
-  return [...new Set(payload.userIds.map(String))];
+  return [...new Set(payload.userIds.map((userId) =>
+    parseObjectId(userId, "userId"),
+  ))];
 };
 
 const emitTransition = (userId, transition) => {
@@ -92,7 +95,7 @@ export const registerPresenceSocket = (socket, {
       } catch (error) {
         reply({
           ok: false,
-          code: error.message.startsWith("userIds must")
+          code: error.statusCode === 400 || error.message.startsWith("userIds must")
             ? "INVALID_PAYLOAD"
             : "INTERNAL_ERROR",
           error: error.message,

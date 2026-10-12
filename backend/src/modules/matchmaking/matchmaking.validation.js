@@ -1,3 +1,5 @@
+import { parseObjectId } from "../../shared/validation.js";
+
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9_-]{8,128}$/;
 
 export const parseSessionId = (value) => {
@@ -21,4 +23,11 @@ export const parseOptionalCallId = (value) => {
     throw error;
   }
   return callId;
+};
+
+export const parseOptionalUserId = (value, fieldName = "userId") => {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  return parseObjectId(value, fieldName);
 };
