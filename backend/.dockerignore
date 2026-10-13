@@ -5,3 +5,7 @@ npm-debug.log
 .gitignore
 Dockerfile
 README.md
+*.log
+coverage
+scripts
+**/*.test.js
