@@ -83,6 +83,7 @@ export class BackendStack extends Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       securityGroups: [network.backendSecurityGroup],
       circuitBreaker: { rollback: true },
+      healthCheckGracePeriod: Duration.seconds(120),
       minHealthyPercent: 100,
     });
     const alb = new elbv2.ApplicationLoadBalancer(this, "ApiAlb", {
@@ -102,7 +103,12 @@ export class BackendStack extends Stack {
       protocol: elbv2.ApplicationProtocol.HTTP,
       targets: [service],
       deregistrationDelay: Duration.seconds(30),
-      healthCheck: { path: "/api/health", healthyHttpCodes: "200", interval: Duration.seconds(30) },
+      healthCheck: {
+        path: "/api/health/ready",
+        healthyHttpCodes: "200",
+        interval: Duration.seconds(30),
+        unhealthyThresholdCount: 3,
+      },
     });
     new CfnOutput(this, "AlbDnsName", { value: alb.loadBalancerDnsName });
     new CfnOutput(this, "ApiUrl", { value: `https://${config.apiDomain}` });

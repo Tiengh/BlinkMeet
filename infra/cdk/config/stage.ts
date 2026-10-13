@@ -1,4 +1,5 @@
 export type Stage = "dev" | "prod";
+export type DeploymentComponent = "all" | "backend" | "frontend";
 
 export interface StageConfig {
   stage: Stage;
@@ -29,10 +30,19 @@ const required = (env: NodeJS.ProcessEnv, key: string): string => {
   return value;
 };
 
-export function loadStageConfig(stage: string, env = process.env): StageConfig {
+export function loadStageConfig(
+  stage: string,
+  env = process.env,
+  component: DeploymentComponent = "all",
+): StageConfig {
   if (stage !== "dev" && stage !== "prod") {
     throw new Error("CDK context stage must be dev or prod");
   }
+  if (!["all", "backend", "frontend"].includes(component)) {
+    throw new Error("Deployment component must be all, backend, or frontend");
+  }
+  const includeBackend = component !== "frontend";
+  const includeFrontend = component !== "backend";
   const prefix = `BLINKMEET_${stage.toUpperCase()}_`;
   const account = required(env, `${prefix}ACCOUNT_ID`);
   const region = required(env, `${prefix}REGION`);
@@ -42,8 +52,8 @@ export function loadStageConfig(stage: string, env = process.env): StageConfig {
   if (azs.length !== 2 || azs[0] === azs[1] || azs.some((az) => !new RegExp(`^${region}[a-z]$`).test(az))) {
     throw new Error(`${prefix}AZS must contain two distinct Availability Zones in ${region}`);
   }
-  const imageTag = required(env, `${prefix}IMAGE_TAG`);
-  if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(imageTag) || imageTag === "latest") {
+  const imageTag = includeBackend ? required(env, `${prefix}IMAGE_TAG`) : "";
+  if (includeBackend && (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(imageTag) || imageTag === "latest")) {
     throw new Error(`${prefix}IMAGE_TAG must be an immutable, non-latest tag`);
   }
   const apiDomain = required(env, `${prefix}API_DOMAIN`);
@@ -60,12 +70,12 @@ export function loadStageConfig(stage: string, env = process.env): StageConfig {
   if (turnUrls && (!turnExternalIp || !turnSecretArn)) {
     throw new Error("TURN_URLS requires TURN_EXTERNAL_IP and TURN_SECRET_ARN");
   }
-  const apiCertificateArn = required(env, `${prefix}API_CERTIFICATE_ARN`);
-  const frontendCertificateArn = required(env, `${prefix}FRONTEND_CERTIFICATE_ARN`);
-  if (!apiCertificateArn.startsWith(`arn:aws:acm:${region}:${account}:certificate/`)) {
+  const apiCertificateArn = includeBackend ? required(env, `${prefix}API_CERTIFICATE_ARN`) : "";
+  const frontendCertificateArn = includeFrontend ? required(env, `${prefix}FRONTEND_CERTIFICATE_ARN`) : "";
+  if (includeBackend && !apiCertificateArn.startsWith(`arn:aws:acm:${region}:${account}:certificate/`)) {
     throw new Error("API_CERTIFICATE_ARN must belong to the deployment account and Region");
   }
-  if (!frontendCertificateArn.startsWith(`arn:aws:acm:us-east-1:${account}:certificate/`)) {
+  if (includeFrontend && !frontendCertificateArn.startsWith(`arn:aws:acm:us-east-1:${account}:certificate/`)) {
     throw new Error("FRONTEND_CERTIFICATE_ARN must belong to the deployment account in us-east-1");
   }
   return {
@@ -82,8 +92,8 @@ export function loadStageConfig(stage: string, env = process.env): StageConfig {
     frontendDomain,
     apiCertificateArn,
     frontendCertificateArn,
-    mongoSecretArn: required(env, `${prefix}MONGO_SECRET_ARN`),
-    jwtSecretArn: required(env, `${prefix}JWT_SECRET_ARN`),
+    mongoSecretArn: includeBackend ? required(env, `${prefix}MONGO_SECRET_ARN`) : "",
+    jwtSecretArn: includeBackend ? required(env, `${prefix}JWT_SECRET_ARN`) : "",
     streamApiKey: env[`${prefix}STREAM_API_KEY`]?.trim(),
     streamApiSecretArn: env[`${prefix}STREAM_API_SECRET_ARN`]?.trim(),
     turnUrls,

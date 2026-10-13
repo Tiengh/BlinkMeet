@@ -1,5 +1,5 @@
 import {
-  CfnOutput, RemovalPolicy, Stack, StackProps,
+  CfnOutput, Duration, RemovalPolicy, Stack, StackProps,
   aws_certificatemanager as acm,
   aws_cloudfront as cloudfront,
   aws_cloudfront_origins as origins,
@@ -31,6 +31,21 @@ export class FrontendStack extends Stack {
   return request;
 }`),
     });
+    const responseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, "SecurityHeaders", {
+      securityHeadersBehavior: {
+        contentTypeOptions: { override: true },
+        frameOptions: { frameOption: cloudfront.HeadersFrameOption.DENY, override: true },
+        referrerPolicy: {
+          referrerPolicy: cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+          override: true,
+        },
+        strictTransportSecurity: {
+          accessControlMaxAge: Duration.days(365),
+          includeSubdomains: true,
+          override: true,
+        },
+      },
+    });
     this.distribution = new cloudfront.Distribution(this, "FrontendDistribution", {
       domainNames: [config.frontendDomain],
       certificate: acm.Certificate.fromCertificateArn(this, "FrontendCertificate", config.frontendCertificateArn),
@@ -40,6 +55,7 @@ export class FrontendStack extends Stack {
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(this.bucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        responseHeadersPolicy,
         functionAssociations: [{ function: spaRewrite, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }],
       },
     });

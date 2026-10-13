@@ -27,7 +27,9 @@ load_stage() {
   REGION="${!REGION_VAR:-}"
   [[ "$ACCOUNT" =~ ^[0-9]{12}$ ]] || fail "$ACCOUNT_VAR must be a 12-digit AWS account ID"
   [[ "$REGION" =~ ^[a-z]{2}-[a-z]+-[0-9]$ ]] || fail "$REGION_VAR must be an AWS Region"
-  STACKS=("BlinkMeet${STAGE_CAP}Network" "BlinkMeet${STAGE_CAP}Registry" "BlinkMeet${STAGE_CAP}Redis" "BlinkMeet${STAGE_CAP}Frontend" "BlinkMeet${STAGE_CAP}Backend")
+  BACKEND_STACKS=("BlinkMeet${STAGE_CAP}Network" "BlinkMeet${STAGE_CAP}Registry" "BlinkMeet${STAGE_CAP}Redis" "BlinkMeet${STAGE_CAP}Backend")
+  FRONTEND_STACK="BlinkMeet${STAGE_CAP}Frontend"
+  STACKS=("${BACKEND_STACKS[@]:0:3}" "$FRONTEND_STACK" "${BACKEND_STACKS[3]}")
 }
 
 check_aws_identity() {
@@ -81,4 +83,18 @@ report_outputs() {
         --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output table
     fi
   done
+}
+
+# Scope affects both stack selection and required CDK environment variables.
+select_component() {
+  COMPONENT="${1:-all}"
+  case "$COMPONENT" in
+    all) SELECTED_STACKS=("${STACKS[@]}");;
+    backend) SELECTED_STACKS=("${BACKEND_STACKS[@]}");;
+    frontend) SELECTED_STACKS=("$FRONTEND_STACK");;
+    *) fail "Component must be all, backend, or frontend";;
+  esac
+}
+scoped_cdk() {
+  (cd "$CDK_DIR" && npx --no-install cdk -c "stage=$STAGE" -c "component=$COMPONENT" "$@")
 }

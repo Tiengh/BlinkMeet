@@ -74,11 +74,11 @@ aws cloudfront create-invalidation --distribution-id "$distribution" --paths '/*
 
 ## Deploy and verify
 
-Run from any directory: `./infra/scripts/deploy.sh dev`. It checks tools, AWS account/Region, bootstrap, secret existence and ACM status; installs locked CDK dependencies; runs type checks, CDK tests, synth and diff; asks for a typed confirmation; then deploys only the five dev stacks. The backend stack is deferred until its ECR image exists and you confirm the NAT EIP allowlist step. It reports stack outputs, waits for ECS stability, and checks `/api/health/ready` (MongoDB + Redis) and the frontend. A failure exits nonzero even if CloudFormation already created resources.
+Run from any directory: `./infra/scripts/deploy.sh dev`, or scope the rollout with `--backend-only` / `--frontend-only`. It validates tools, AWS identity, bootstrap and credentials/certificates for the selected component; installs locked CDK dependencies; runs checks, synth and diff; then deploys the selected dev stacks. The backend stack is deferred until its ECR image exists and you confirm the NAT EIP allowlist step. It reports stack outputs and waits for ECS stability. Run `./infra/scripts/verify.sh dev` only after publishing the frontend and setting DNS, or scope the checks using `--backend-only` / `--frontend-only`. A deployment failure can leave billable partial resources.
 
 After the Network stack is deployed, add **each output NAT public IP as a `/32`** in the Atlas project IP Access List before confirming the backend deployment. Remove obsolete NAT IPs from Atlas manually after a destroy/redeploy. Do not allowlist `0.0.0.0/0`. Atlas DNS/SRV and outbound TCP to its hosts must work through NAT. `rediss://` connects to private ElastiCache with in-transit encryption; the SG permits Redis only from backend tasks. This baseline uses no Redis AUTH token, relying on private isolated subnets and SG rules. Add Redis authentication before using a less restricted network design.
 
-After deploy, configure the DNS records, upload frontend assets, then rerun the HTTP checks if the first smoke check failed while DNS/assets were pending. Verify separately:
+After deploy, configure the DNS records and upload frontend assets, then run `./infra/scripts/verify.sh dev`. Verify separately:
 
 ```bash
 curl -fsS "https://$BLINKMEET_DEV_API_DOMAIN/api/health/ready"
@@ -97,3 +97,29 @@ In two browsers/accounts, verify WebSocket upgrade through the ALB, matchmaking 
 For the phase regression, run **deploy → smoke test → destroy → verify cleanup → redeploy** in a disposable AWS account. After redeploy, compare the new NAT EIP outputs, update the Atlas allowlist, and repeat TLS/readiness, WSS, multi-task and TURN checks. Record the actual account/Region, EIPs, test results and costs in your deployment notes. This repository cannot claim this cloud lifecycle was exercised without credentials and an Atlas project.
 
 For an application rollback, set the previous immutable ECR image tag in the stage config, review `cdk diff`, and redeploy the Backend stack or run the guarded dev deploy script. ECS circuit breaker rolls back failed service deployments, but it does not revert Atlas data changes. For infrastructure rollback, inspect CloudFormation stack events and `cdk diff`, then revert the CDK source/config and redeploy after reviewing stateful resource changes. Avoid deleting Redis, S3 or ECR in production; the prod stacks retain persistent resources by default.
+
+## Deploy without CloudFront while account verification is pending
+
+The AWS account may temporarily reject CloudFront creation with "Your account must be verified before you can add new CloudFront resources." To continue infrastructure development without touching CloudFront:
+
+```bash
+./infra/scripts/deploy.sh dev --backend-only
+# After setting API DNS and confirming the ECR image / Atlas NAT allowlist:
+./infra/scripts/verify.sh dev --backend-only
+```
+
+The backend-only CDK app creates Network, Registry, Redis and Backend stacks. It does not synthesize or deploy CloudFront and does not require a CloudFront ACM certificate. The backend is publicly reachable through the HTTPS ALB and API hostname after DNS configuration. Browser-to-API CORS still requires an allowed frontend origin. Backend-only mode does not provision a temporary frontend website.
+
+Once CloudFront is unblocked, update/issue the frontend certificate and run:
+
+```bash
+./infra/scripts/deploy.sh dev --frontend-only
+# Upload Vite dist to the reported S3 bucket, configure frontend DNS, invalidate CloudFront:
+./infra/scripts/verify.sh dev --frontend-only
+```
+
+The default `deploy.sh dev` handles all stacks; the frontend-only command does not change ECS, NAT, Redis or Atlas. Always review `cdk diff`. The script intentionally does not automatically destroy resources when a deployment fails, avoiding accidental data loss. Use the guarded dev-only destroy script if cleanup is required.
+
+For direct commands, specify `-c component=backend` or `-c component=frontend` alongside `-c stage=dev`. With no component context, CDK synthesizes the complete app.
+
+The API container is API-only; unknown routes return JSON 404 rather than attempting to load `frontend/dist/index.html`. ALB target health checks use database/Redis readiness with ECS grace period. CloudFront adds baseline browser security headers; CSP should be configured separately after integration testing.

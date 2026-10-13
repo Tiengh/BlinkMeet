@@ -4,7 +4,6 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import mongoose from "mongoose";
-import path from "path";
 import authRoutes from "./modules/auth/auth.routes.js";
 import userRoutes from "./modules/user/user.routes.js";
 import friendRoutes from "./modules/friend/friend.routes.js";
@@ -17,7 +16,6 @@ import { securityConfig } from "./shared/security.config.js";
 import { getRedisClient } from "./infrastructure/redis/redis.client.js";
 
 const app = express();
-const __dirname = path.resolve();
 
 app.disable("x-powered-by");
 app.set("query parser", "simple");
@@ -53,12 +51,10 @@ app.get("/api/health/ready", (req, res) => {
   res.status(ready ? 200 : 503).json({ success: ready });
 });
 
-if (process.env.NODE_ENV === "production") {
-  app.use(express.static(path.join(__dirname, "../frontend/dist")));
-  app.get("*", (req, res) => {
-    res.sendFile(path.join(__dirname, "../frontend/dist/index.html"));
-  });
-}
+// Frontend assets are hosted by S3 + CloudFront, not by the ECS API container.
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: "Route not found" });
+});
 
 app.use(errorMiddleware);
 

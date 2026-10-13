@@ -57,6 +57,11 @@ test("dev infrastructure isolates Redis and ECS, uses TLS and private CloudFront
     },
   });
   frontendTemplate.resourceCountIs("AWS::CloudFront::OriginAccessControl", 1);
+  frontendTemplate.hasResourceProperties("AWS::CloudFront::ResponseHeadersPolicy", {
+    ResponseHeadersPolicyConfig: {
+      SecurityHeadersConfig: { ContentTypeOptions: { Override: true } },
+    },
+  });
   const backendTemplate = Template.fromStack(backend);
   backendTemplate.hasResourceProperties("AWS::ECS::Service", {
     DesiredCount: 2,
@@ -65,6 +70,9 @@ test("dev infrastructure isolates Redis and ECS, uses TLS and private CloudFront
   backendTemplate.hasResourceProperties("AWS::ElasticLoadBalancingV2::Listener", {
     Port: 443,
     Protocol: "HTTPS",
+  });
+  backendTemplate.hasResourceProperties("AWS::ElasticLoadBalancingV2::TargetGroup", {
+    HealthCheckPath: "/api/health/ready",
   });
   const task = Object.values(backendTemplate.findResources("AWS::ECS::TaskDefinition"))[0] as {
     Properties: { ContainerDefinitions: Array<{ Environment: Array<{ Name: string; Value: string }>; Secrets: Array<{ Name: string }> }> }
@@ -91,4 +99,25 @@ test("prod topology has one NAT per AZ and Redis failover", () => {
     AutomaticFailoverEnabled: true,
     MultiAZEnabled: true,
   });
+});
+
+test("scoped deployments only require configuration for their component", () => {
+  const backend = loadStageConfig("dev", {
+    ...env,
+    BLINKMEET_DEV_FRONTEND_CERTIFICATE_ARN: "",
+  }, "backend");
+  assert.equal(backend.frontendCertificateArn, "");
+  assert.equal(backend.imageTag, env.BLINKMEET_DEV_IMAGE_TAG);
+
+  const frontend = loadStageConfig("dev", {
+    ...env,
+    BLINKMEET_DEV_API_CERTIFICATE_ARN: "",
+    BLINKMEET_DEV_MONGO_SECRET_ARN: "",
+    BLINKMEET_DEV_JWT_SECRET_ARN: "",
+    BLINKMEET_DEV_IMAGE_TAG: "",
+  }, "frontend");
+  assert.equal(frontend.apiCertificateArn, "");
+  assert.equal(frontend.imageTag, "");
+  assert.equal(frontend.mongoSecretArn, "");
+  assert.throws(() => loadStageConfig("dev", env, "broken" as "all"), /component/);
 });
