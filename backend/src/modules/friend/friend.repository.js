@@ -3,6 +3,7 @@ import { DeleteCommand, GetCommand, QueryCommand, TransactWriteCommand } from "@
 import { getDynamo, getTable, isConditionalFailure } from "../../infrastructure/database/dynamodb.js";
 import { BadRequestError } from "../../shared/errors/bad-request.error.js";
 import { findUserById } from "../user/user.repository.js";
+import { toUserPreview } from "../user/user.mapper.js";
 
 const requestIdFor = (a, b) => createHash("sha256")
   .update([String(a), String(b)].sort().join(":"))
@@ -91,7 +92,7 @@ const listRequests = async (index, pk) => {
   return Promise.all(requests.map(async (request) => ({
     ...request,
     [index === "IncomingRequests" ? "sender" : "recipient"]:
-      await findUserById(index === "IncomingRequests" ? request.sender : request.recipient),
+      toUserPreview(await findUserById(index === "IncomingRequests" ? request.sender : request.recipient)),
   })));
 };
 

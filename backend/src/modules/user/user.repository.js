@@ -1,20 +1,13 @@
 import { BatchGetCommand, GetCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { getDynamo, getTable } from "../../infrastructure/database/dynamodb.js";
-
-const publicUser = (user) => {
-  if (!user) {return null;}
-  const result = { ...user };
-  delete result.user_password;
-  delete result.recommendationBucket;
-  return result;
-};
+import { toAuthenticatedUser, toUserPreview } from "./user.mapper.js";
 
 export const getUserRecord = async (userId) =>
   (await getDynamo().send(new GetCommand({
     TableName: getTable("users"), Key: { _id: String(userId) }, ConsistentRead: true,
   }))).Item || null;
 
-export const findUserById = async (userId) => publicUser(await getUserRecord(userId));
+export const findUserById = async (userId) => toAuthenticatedUser(await getUserRecord(userId));
 
 const listFriendEdges = async (userId) => {
   const edges = [];
@@ -62,7 +55,7 @@ const batchUsers = async (ids) => {
       retry = 0;
     }
   }
-  return result.map(publicUser);
+  return result.map(toUserPreview);
 };
 
 export const findUserFriends = async (userId) => {
@@ -90,7 +83,9 @@ export const findRecommendedUsers = async (userId) => {
         ExpressionAttributeValues: { ":bucket": String(bucket) },
         Limit: 40, ExclusiveStartKey: cursor,
       }));
-      result.push(...(page.Items || []).filter((user) => !friends.has(user._id)).map(publicUser));
+      result.push(...(page.Items || [])
+        .filter((user) => user.user_isOnboarded === true && !friends.has(user._id))
+        .map(toUserPreview));
       cursor = page.LastEvaluatedKey;
       pages += 1;
     } while (cursor && pages < 2 && result.length < 20);

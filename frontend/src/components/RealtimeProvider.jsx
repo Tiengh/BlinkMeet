@@ -76,12 +76,17 @@ const RealtimeProvider = ({ userId, children }) => {
         console.error("Could not subscribe to friend presence:", error);
       });
       void (async () => {
-        let cursor = null;
-        do {
-          const response = await emitWithAck(socket, "chat:sync-delivered", { cursor }, 20_000);
-          cursor = response.nextCursor;
-          if (cursor) {await new Promise((resolve) => setTimeout(resolve, 3_100));}
-        } while (cursor && socket.connected && connectionVersion === connectionVersionRef.current);
+        // GSI reads may miss recently committed messages; repeat after a delay.
+        for (const delay of [0, 2_000, 5_000]) {
+          if (delay) {await new Promise((resolve) => setTimeout(resolve, delay));}
+          if (!socket.connected || connectionVersion !== connectionVersionRef.current) {return;}
+          let cursor = null;
+          do {
+            const response = await emitWithAck(socket, "chat:sync-delivered", { cursor }, 20_000);
+            cursor = response.nextCursor;
+            if (cursor) {await new Promise((resolve) => setTimeout(resolve, 3_100));}
+          } while (cursor && socket.connected && connectionVersion === connectionVersionRef.current);
+        }
       })().catch((error) => {
         console.error("Could not reconcile pending chat deliveries:", error);
       });

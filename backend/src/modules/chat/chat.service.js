@@ -66,6 +66,17 @@ export const getConversationHistory = async (
   };
 };
 
+// A committed message remains successful even if conversation metadata update fails.
+export const updateLastMessageBestEffort = async (conversationId, messageId, update = setLastMessage) => {
+  try {
+    await update(conversationId, messageId);
+  } catch (error) {
+    console.error("Conversation lastMessage update failed", {
+      conversationId, messageId, error: error?.message || String(error),
+    });
+  }
+};
+
 export const sendMessage = async (
   senderId,
   { recipientId, content, clientMessageId },
@@ -82,7 +93,7 @@ export const sendMessage = async (
   if (String(message.conversation) !== String(conversation._id)) {
     throw new BadRequestError("clientMessageId was already used in another conversation");
   }
-  await setLastMessage(conversation._id, message._id);
+  await updateLastMessageBestEffort(conversation._id, message._id);
   return message;
 };
 

@@ -3,12 +3,22 @@ import { randomBytes } from "node:crypto";
 import { test } from "node:test";
 import { createUser, findUserByEmail, updateUser } from "../../modules/auth/auth.repository.js";
 import { findUserById, areFriends, findUserFriends, findRecommendedUsers } from "../../modules/user/user.repository.js";
-import { acceptRequest, createRequest, findRequestById } from "../../modules/friend/friend.repository.js";
+import { acceptRequest, createRequest, findRequestById, findIncomingRequests, findPendingOutgoingRequests } from "../../modules/friend/friend.repository.js";
 import {
   createMessage, findMessageById, findMessages, findOrCreateConversation,
   markMessageDelivered, markMessagesSeen, setLastMessage, findConversationById,
   findPendingDeliveryMessages, findUnseenMessages,
 } from "../../modules/chat/chat.repository.js";
+
+const eventually = async (fn, predicate, label) => {
+  const deadline = Date.now() + 10_000;
+  do {
+    const value = await fn();
+    if (predicate(value)) {return value;}
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  } while (Date.now() < deadline);
+  assert.fail(`Timed out waiting for ${label}`);
+};
 
 test("DynamoDB Local preserves uniqueness, friendships, idempotency and history", {
   skip: !process.env.DYNAMODB_ENDPOINT,
@@ -31,18 +41,34 @@ test("DynamoDB Local preserves uniqueness, friendships, idempotency and history"
   const second = await newUser("Second", `second-${suffix}@example.com`);
   await updateUser(first._id, { user_isOnboarded: true, user_name: "One" });
   await updateUser(second._id, { user_isOnboarded: true, user_name: "Second" });
-  assert.ok((await findRecommendedUsers(first._id)).some((user) => user._id === second._id));
+  const recommended = await eventually(
+    () => findRecommendedUsers(first._id), (users) => users.some((user) => user._id === second._id),
+    "recommendations GSI",
+  );
+  assert.equal(recommended.find((user) => user._id === second._id).user_email, undefined);
 
   const requests = await Promise.allSettled([
     createRequest(first._id, second._id), createRequest(second._id, first._id),
   ]);
   assert.equal(requests.filter((result) => result.status === "fulfilled").length, 1);
   const request = requests.find((result) => result.status === "fulfilled").value;
+  const incoming = await eventually(
+    () => findIncomingRequests(request.recipient), (items) => items.some((item) => item._id === request._id),
+    "incoming request GSI",
+  );
+  const outgoing = await eventually(
+    () => findPendingOutgoingRequests(request.sender), (items) => items.some((item) => item._id === request._id),
+    "outgoing request GSI",
+  );
+  assert.equal(incoming.find((item) => item._id === request._id).sender.user_email, undefined);
+  assert.equal(outgoing.find((item) => item._id === request._id).recipient.user_email, undefined);
   await acceptRequest(request);
   assert.equal((await findRequestById(request._id)).status, "accepted");
   assert.equal(await areFriends(first._id, second._id), true);
   assert.equal(await areFriends(second._id, first._id), true);
-  assert.equal((await findUserFriends(first._id)).user_friends[0]._id, second._id);
+  const friend = (await findUserFriends(first._id)).user_friends[0];
+  assert.equal(friend._id, second._id);
+  assert.equal(friend.user_email, undefined);
 
   const [conversationA, conversationB] = await Promise.all([
     findOrCreateConversation(first._id, second._id),
@@ -73,14 +99,24 @@ test("DynamoDB Local preserves uniqueness, friendships, idempotency and history"
   const secondPage = await findMessages(conversationA._id, { limit: 2, before: firstPage.nextCursor });
   assert.equal(secondPage.messages.length, 1);
   assert.notEqual(firstPage.messages[0]._id, secondPage.messages[0]._id);
-  const pending = await findPendingDeliveryMessages(second._id);
+  const pending = await eventually(
+    () => findPendingDeliveryMessages(second._id), (page) => page.messages.length === 3,
+    "pending delivery GSI",
+  );
   assert.equal(pending.messages.length, 3);
-  const unseenSent = await findUnseenMessages(conversationA._id, second._id);
+  const unseenSent = await eventually(
+    () => findUnseenMessages(conversationA._id, second._id), (page) => page.messages.length === 3,
+    "unseen message GSI",
+  );
   assert.equal(unseenSent.messages.length, 3);
   assert.ok(unseenSent.nextCursor);
   assert.equal((await findMessageById(duplicate[0]._id)).status, "sent");
   assert.equal((await markMessageDelivered(duplicate[0]._id, second._id)).status, "delivered");
-  const unseenDelivered = await findUnseenMessages(conversationA._id, second._id, unseenSent.nextCursor);
+  const unseenDelivered = await eventually(
+    () => findUnseenMessages(conversationA._id, second._id, unseenSent.nextCursor),
+    (page) => page.messages.some((message) => message._id === duplicate[0]._id),
+    "delivered message GSI",
+  );
   assert.equal(unseenDelivered.messages.length, 1);
   assert.equal(unseenDelivered.messages[0]._id, duplicate[0]._id);
   assert.equal(await markMessageDelivered(duplicate[0]._id, second._id), null);
