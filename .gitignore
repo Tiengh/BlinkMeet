@@ -24,3 +24,6 @@ dist-ssr
 *.sw?
 
 .env
+infra/config/*.env
+infra/cdk/cdk.out
+infra/cdk/cdk.context.json

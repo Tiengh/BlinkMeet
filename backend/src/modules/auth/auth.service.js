@@ -1,10 +1,11 @@
 import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
 import { upsertStreamUser } from "../../lib/stream.js";
-import { BadRequestError } from "../../shared/errors/bad-request.error.js";
 import { NotFoundError } from "../../shared/errors/not-found.error.js";
 import { UnauthorizedError } from "../../shared/errors/unauthorized.error.js";
 import { toPublicUser } from "./auth.mapper.js";
 import { createUser, findUserByEmail, updateUser } from "./auth.repository.js";
+import { findUserFriendIds } from "../user/user.repository.js";
 import {
   parseLoginInput,
   parseOnboardingInput,
@@ -17,23 +18,24 @@ const createToken = (userId) =>
     expiresIn: "7d",
   });
 
+const publicUserWithFriends = async (user) => ({
+  ...toPublicUser(user),
+  ...await findUserFriendIds(user._id),
+});
+
 export async function signupUser(input = {}) {
   let { email, password, name } = input;
   ({ email, password, name } = parseSignupInput({ email, password, name }));
-  if (await findUserByEmail(email)) {
-    throw new BadRequestError("Already existed, use a different email");
-  }
-
   const avatarSeed = Math.random().toString(36).substring(2, 10);
   const user = await createUser({
     user_email: email,
     user_name: name,
-    user_password: password,
+    user_password: await bcrypt.hash(password, 10),
     user_profilePic: `https://api.dicebear.com/10.x/adventurer/svg?seed=${avatarSeed}`,
   });
 
   await syncStreamUser(user);
-  return { user: toPublicUser(user), token: createToken(user._id) };
+  return { user: await publicUserWithFriends(user), token: createToken(user._id) };
 }
 
 export async function loginUser(input = {}) {
@@ -42,11 +44,11 @@ export async function loginUser(input = {}) {
 
   const user = await findUserByEmail(email);
   if (!user) {throw new UnauthorizedError("Invalid email or password");}
-  if (!(await user.matchPassword(password))) {
+  if (!(await bcrypt.compare(password, user.user_password))) {
     throw new UnauthorizedError("Invalid email or password");
   }
 
-  return { user: toPublicUser(user), token: createToken(user._id) };
+  return { user: await publicUserWithFriends(user), token: createToken(user._id) };
 }
 
 export async function onboardUser(userId, data) {
@@ -71,7 +73,7 @@ export async function onboardUser(userId, data) {
   if (!user) {throw new NotFoundError("User not found");}
 
   await syncStreamUser(user);
-  return { user: toPublicUser(user) };
+  return { user: await publicUserWithFriends(user) };
 }
 
 async function syncStreamUser(user) {

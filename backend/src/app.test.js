@@ -36,3 +36,22 @@ test("CORS rejects browser requests from an unapproved origin", async () => {
     assert.equal((await response.json()).message, "Origin is not allowed by CORS");
   });
 });
+
+test("readiness fails when database and Redis are unavailable", async () => {
+  await withServer(async (url) => {
+    const response = await fetch(`${url}/api/health/ready`);
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { success: false });
+  });
+});
+
+test("unknown API routes return JSON 404 instead of a missing frontend index.html", async () => {
+  await withServer(async (url) => {
+    const response = await fetch(`${url}/nonexistent-route`);
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), {
+      success: false,
+      message: "Route not found",
+    });
+  });
+});

@@ -68,10 +68,13 @@ test("delivery sync uses authenticated identity and notifies each sender", async
   registerChatSocket(socket, {
     deliverPendingMessages: async (...args) => {
       calls.push(args);
-      return [
-        { senderId: "friend-a", messageIds: ["message-1", "message-2"] },
-        { senderId: "friend-b", messageIds: ["message-3"] },
-      ];
+      return {
+        deliveries: [
+          { senderId: "friend-a", messageIds: ["message-1", "message-2"] },
+          { senderId: "friend-b", messageIds: ["message-3"] },
+        ],
+        nextCursor: null,
+      };
     },
   });
 
@@ -79,8 +82,8 @@ test("delivery sync uses authenticated identity and notifies each sender", async
     handlers.get("chat:sync-delivered")({ recipientId: "forged-user" }, resolve);
   });
 
-  assert.deepEqual(calls, [["authenticated-user"]]);
-  assert.deepEqual(response, { ok: true, deliveredCount: 3 });
+  assert.deepEqual(calls, [["authenticated-user", null]]);
+  assert.deepEqual(response, { ok: true, deliveredCount: 3, nextCursor: null });
   assert.deepEqual(delivered, [
     {
       room: "user:friend-a",

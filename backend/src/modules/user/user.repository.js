@@ -1,20 +1,95 @@
-import User from "./user.model.js";
+import { BatchGetCommand, GetCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { getDynamo, getTable } from "../../infrastructure/database/dynamodb.js";
+import { toAuthenticatedUser, toUserPreview } from "./user.mapper.js";
 
-export const findRecommendedUsers = (userId, friendIds) =>
-  User.aggregate([
-    { $match: { _id: { $ne: userId, $nin: friendIds }, user_isOnboarded: true } },
-    { $sample: { size: 20 } },
-    { $project: { user_password: 0, __v: 0 } },
-  ]);
+export const getUserRecord = async (userId) =>
+  (await getDynamo().send(new GetCommand({
+    TableName: getTable("users"), Key: { _id: String(userId) }, ConsistentRead: true,
+  }))).Item || null;
 
-export const findUserFriends = (userId) =>
-  User.findById(userId)
-    .select("user_friends")
-    .populate("user_friends", "user_name user_profilePic user_nativeLanguage user_learningLanguage");
+export const findUserById = async (userId) => toAuthenticatedUser(await getUserRecord(userId));
 
-export const findUserFriendIds = (userId) =>
-  User.findById(userId).select("user_friends").lean();
+const listFriendEdges = async (userId) => {
+  const edges = [];
+  let cursor;
+  do {
+    const page = await getDynamo().send(new QueryCommand({
+      TableName: getTable("friendships"),
+      KeyConditionExpression: "userId = :userId",
+      ExpressionAttributeValues: { ":userId": String(userId) },
+      ExclusiveStartKey: cursor,
+      ConsistentRead: true,
+    }));
+    edges.push(...(page.Items || []));
+    cursor = page.LastEvaluatedKey;
+  } while (cursor);
+  return edges;
+};
 
-export const findUserById = (userId) => User.findById(userId);
-export const addFriend = (userId, friendId) =>
-  User.findByIdAndUpdate(userId, { $addToSet: { user_friends: friendId } });
+export const findUserFriendIds = async (userId) => ({
+  user_friends: (await listFriendEdges(userId)).map((edge) => edge.friendId),
+});
+
+export const areFriends = async (userId, friendId) => Boolean((await getDynamo().send(new GetCommand({
+  TableName: getTable("friendships"),
+  Key: { userId: String(userId), friendId: String(friendId) },
+  ConsistentRead: true,
+}))).Item);
+
+const batchUsers = async (ids) => {
+  const result = [];
+  let keys = ids.map((_id) => ({ _id: String(_id) }));
+  let retry = 0;
+  while (keys.length) {
+    const page = await getDynamo().send(new BatchGetCommand({
+      RequestItems: { [getTable("users")]: { Keys: keys.slice(0, 100) } },
+    }));
+    result.push(...(page.Responses?.[getTable("users")] || []));
+    const unprocessed = page.UnprocessedKeys?.[getTable("users")]?.Keys || [];
+    keys = [...keys.slice(100), ...unprocessed];
+    if (unprocessed.length) {
+      retry += 1;
+      if (retry > 8) {throw new Error("DynamoDB could not read all friend profiles");}
+      await new Promise((resolve) => setTimeout(resolve, 20 * 2 ** retry));
+    } else {
+      retry = 0;
+    }
+  }
+  return result.map(toUserPreview);
+};
+
+export const findUserFriends = async (userId) => {
+  const user = await findUserById(userId);
+  if (!user) {return null;}
+  const ids = (await listFriendEdges(userId)).map((edge) => edge.friendId);
+  const users = await batchUsers(ids);
+  const byId = new Map(users.map((friend) => [friend._id, friend]));
+  return { user_friends: ids.map((id) => byId.get(id)).filter(Boolean) };
+};
+
+export const findRecommendedUsers = async (userId) => {
+  const friends = new Set((await findUserFriendIds(userId)).user_friends);
+  friends.add(String(userId));
+  const buckets = Array.from({ length: 16 }, (_, index) => index)
+    .sort(() => Math.random() - 0.5);
+  const result = [];
+  for (const bucket of buckets) {
+    let cursor;
+    let pages = 0;
+    do {
+      const page = await getDynamo().send(new QueryCommand({
+        TableName: getTable("users"), IndexName: "Recommendations",
+        KeyConditionExpression: "recommendationBucket = :bucket",
+        ExpressionAttributeValues: { ":bucket": String(bucket) },
+        Limit: 40, ExclusiveStartKey: cursor,
+      }));
+      result.push(...(page.Items || [])
+        .filter((user) => user.user_isOnboarded === true && !friends.has(user._id))
+        .map(toUserPreview));
+      cursor = page.LastEvaluatedKey;
+      pages += 1;
+    } while (cursor && pages < 2 && result.length < 20);
+    if (result.length >= 20) {break;}
+  }
+  return result.slice(0, 20);
+};

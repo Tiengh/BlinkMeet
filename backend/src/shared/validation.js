@@ -1,8 +1,7 @@
-import mongoose from "mongoose";
 import { BadRequestError } from "./errors/bad-request.error.js";
 
 export const parseObjectId = (value, fieldName = "id") => {
-  if (typeof value !== "string" || !mongoose.isObjectIdOrHexString(value)) {
+  if (typeof value !== "string" || !/^[a-f\d]{24}$/i.test(value)) {
     throw new BadRequestError(`${fieldName} is invalid`);
   }
   return value;

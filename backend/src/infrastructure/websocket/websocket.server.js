@@ -49,6 +49,9 @@ let io;
 let adapterClients = [];
 let presenceSweepTimer;
 
+export const isWebSocketAdapterReady = () =>
+  adapterClients.length === 2 && adapterClients.every((client) => client.isReady);
+
 export const initializeWebSocketServer = async (httpServer) => {
   io = new Server(httpServer, {
     cors: corsOptions,

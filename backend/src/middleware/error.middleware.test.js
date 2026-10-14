@@ -15,16 +15,14 @@ const createResponse = () => ({
   },
 });
 
-test("Mongo duplicate key errors are returned as conflict responses", () => {
+test("DynamoDB conditional write failures are returned as conflict responses", () => {
   const res = createResponse();
 
   errorMiddleware({
-    code: 11000,
-    keyPattern: { user_email: 1 },
+    name: "ConditionalCheckFailedException",
   }, {}, res, () => {});
 
   assert.equal(res.statusCode, 409);
   assert.equal(res.body.success, false);
-  assert.equal(res.body.message, "Resource already exists");
-  assert.deepEqual(res.body.details, { fields: ["user_email"] });
+  assert.equal(res.body.message, "Resource state changed; retry the operation");
 });

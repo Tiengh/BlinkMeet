@@ -2,7 +2,7 @@ import { BadRequestError } from "../../shared/errors/bad-request.error.js";
 import { ForbiddenError } from "../../shared/errors/forbidden.error.js";
 import { NotFoundError } from "../../shared/errors/not-found.error.js";
 import {
-  addUserFriend,
+  acceptRequest,
   createRequest,
   deleteRequest,
   findAcceptedRequests,
@@ -12,9 +12,10 @@ import {
   findRequest,
   findRequestById,
 } from "./friend.repository.js";
+import { areFriends } from "../user/user.repository.js";
 
 export async function sendRequest(senderId, recipientId) {
-  if (senderId.equals(recipientId)) {
+  if (String(senderId) === String(recipientId)) {
     throw new BadRequestError("You can't send a friend request to yourself");
   }
 
@@ -23,7 +24,7 @@ export async function sendRequest(senderId, recipientId) {
     throw new BadRequestError("Recipient not found");
   }
 
-  const alreadyFriends = recipient.user_friends.some((friendId) => friendId.equals(senderId));
+  const alreadyFriends = await areFriends(senderId, recipientId);
   if (alreadyFriends) {
     throw new BadRequestError("You are already friends with this user");
   }
@@ -41,19 +42,18 @@ export async function updateRequest(requestId, currentUserId, action) {
   if (!request) {
     throw new NotFoundError("Friend request not found");
   }
-  if (!request.recipient.equals(currentUserId)) {
+  if (String(request.recipient) !== String(currentUserId)) {
     throw new ForbiddenError(`You are not authorized to ${action} this request`);
   }
 
   if (action === "decline") {
-    await deleteRequest(requestId);
+    await deleteRequest(requestId, currentUserId);
     return {};
   }
 
-  request.status = "accepted";
-  await request.save();
-  await addUserFriend(request.sender, request.recipient);
-  await addUserFriend(request.recipient, request.sender);
+  if (request.status === "accepted") {return {};}
+
+  await acceptRequest(request);
   return {};
 }
 

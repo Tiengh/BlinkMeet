@@ -49,12 +49,26 @@ const useChatConversation = ({ currentUserId, targetUserId }) => {
   const typingTimerRef = useRef(null);
   const typingStateRef = useRef(false);
   const wasConnectedRef = useRef(isConnected);
+  const seenSyncVersionRef = useRef(0);
 
   targetUserIdRef.current = String(targetUserId || "");
 
   const markSeen = useCallback((conversationId) => {
     if (!socket?.connected || !conversationId) {return;}
-    void emitWithAck(socket, "chat:seen", { conversationId }).catch((seenError) => {
+    const version = ++seenSyncVersionRef.current;
+    void (async () => {
+      // Repeat bounded reads so delayed GSI updates do not leave recent messages unseen.
+      for (const delay of [0, 2_000, 5_000]) {
+        if (delay) {await new Promise((resolve) => setTimeout(resolve, delay));}
+        if (!socket.connected || version !== seenSyncVersionRef.current) {return;}
+        let cursor = null;
+        do {
+          const response = await emitWithAck(socket, "chat:seen", { conversationId, cursor }, 20_000);
+          cursor = response.nextCursor;
+          if (cursor) {await new Promise((resolve) => setTimeout(resolve, 1_200));}
+        } while (cursor && socket.connected && version === seenSyncVersionRef.current);
+      }
+    })().catch((seenError) => {
       console.error("Could not mark conversation as seen:", seenError);
     });
   }, [socket]);
@@ -123,6 +137,7 @@ const useChatConversation = ({ currentUserId, targetUserId }) => {
   }, [markSeen, targetUserId]);
 
   useEffect(() => {
+    seenSyncVersionRef.current += 1;
     loadRequestRef.current += 1;
     conversationRef.current = null;
     clearTimeout(peerTypingTimerRef.current);

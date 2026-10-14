@@ -76,10 +76,12 @@ export const registerChatSocket = (socket, dependencies = {}) => {
     }
   });
 
-  socket.on("chat:sync-delivered", async (_payload = {}, acknowledge = () => {}) => {
+  socket.on("chat:sync-delivered", async (payload = {}, acknowledge = () => {}) => {
     const reply = typeof acknowledge === "function" ? acknowledge : () => {};
     try {
-      const deliveries = await services.deliverPendingMessages(userId);
+      const { deliveries, nextCursor } = await services.deliverPendingMessages(
+        userId, payload.cursor || null,
+      );
       let deliveredCount = 0;
       deliveries.forEach(({ senderId, messageIds }) => {
         if (!messageIds.length) {return;}
@@ -89,7 +91,7 @@ export const registerChatSocket = (socket, dependencies = {}) => {
           status: "delivered",
         });
       });
-      reply({ ok: true, deliveredCount });
+      reply({ ok: true, deliveredCount, nextCursor });
     } catch (error) {
       errorReply(reply, error);
     }
@@ -98,14 +100,16 @@ export const registerChatSocket = (socket, dependencies = {}) => {
   socket.on("chat:seen", async (payload = {}, acknowledge = () => {}) => {
     const reply = typeof acknowledge === "function" ? acknowledge : () => {};
     try {
-      const result = await services.seeConversation(userId, payload.conversationId);
+      const result = await services.seeConversation(
+        userId, payload.conversationId, payload.cursor || null,
+      );
       if (result.senderId && result.messageIds.length) {
         emitMessageStatus(result.senderId, {
           messageIds: result.messageIds,
           status: "seen",
         });
       }
-      reply({ ok: true, messageIds: result.messageIds });
+      reply({ ok: true, messageIds: result.messageIds, nextCursor: result.nextCursor || null });
     } catch (error) {
       errorReply(reply, error);
     }

@@ -3,7 +3,6 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
-import path from "path";
 import authRoutes from "./modules/auth/auth.routes.js";
 import userRoutes from "./modules/user/user.routes.js";
 import friendRoutes from "./modules/friend/friend.routes.js";
@@ -13,9 +12,11 @@ import matchmakingRoutes from "./modules/matchmaking/matchmaking.routes.js";
 import { errorMiddleware } from "./middleware/error.middleware.js";
 import { corsOptions } from "./shared/cors.config.js";
 import { securityConfig } from "./shared/security.config.js";
+import { getRedisClient } from "./infrastructure/redis/redis.client.js";
+import { checkDynamoReady } from "./infrastructure/database/dynamodb.js";
+import { isWebSocketAdapterReady } from "./infrastructure/websocket/websocket.server.js";
 
 const app = express();
-const __dirname = path.resolve();
 
 app.disable("x-powered-by");
 app.set("query parser", "simple");
@@ -46,12 +47,26 @@ app.get("/api/health", (req, res) => {
   res.status(200).json({ success: true, message: "BlinkMeet backend is running" });
 });
 
-if (process.env.NODE_ENV === "production") {
-  app.use(express.static(path.join(__dirname, "../frontend/dist")));
-  app.get("*", (req, res) => {
-    res.sendFile(path.join(__dirname, "../frontend/dist/index.html"));
-  });
-}
+let readiness = { checkedAt: 0, healthy: false };
+app.get("/api/health/ready", async (req, res) => {
+  if (Date.now() - readiness.checkedAt > 5_000) {
+    try {
+      if (!getRedisClient().isReady || !isWebSocketAdapterReady()) {
+        throw new Error("Redis or Socket.IO adapter is unavailable");
+      }
+      await checkDynamoReady();
+      readiness = { checkedAt: Date.now(), healthy: true };
+    } catch {
+      readiness = { checkedAt: Date.now(), healthy: false };
+    }
+  }
+  res.status(readiness.healthy ? 200 : 503).json({ success: readiness.healthy });
+});
+
+// Frontend assets are hosted by S3 + CloudFront, not by the ECS API container.
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: "Route not found" });
+});
 
 app.use(errorMiddleware);
 
