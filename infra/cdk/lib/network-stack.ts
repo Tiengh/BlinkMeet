@@ -21,6 +21,11 @@ export class NetworkStack extends Stack {
       ],
     });
 
+    this.vpc.addGatewayEndpoint("DynamoDbEndpoint", {
+      service: ec2.GatewayVpcEndpointAwsService.DYNAMODB,
+      subnets: [{ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }],
+    });
+
     this.albSecurityGroup = new ec2.SecurityGroup(this, "AlbSecurityGroup", {
       vpc: this.vpc,
       allowAllOutbound: false,
@@ -33,7 +38,11 @@ export class NetworkStack extends Stack {
       vpc: this.vpc,
       allowAllOutbound: false,
     });
-    this.albSecurityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), "HTTPS clients");
+    if (config.apiDomain) {
+      this.albSecurityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), "HTTPS clients");
+    } else {
+      this.albSecurityGroup.addIngressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(80), "VPC infrastructure checks");
+    }
     this.albSecurityGroup.addEgressRule(this.backendSecurityGroup, ec2.Port.tcp(3000), "Backend target");
     this.backendSecurityGroup.addIngressRule(this.albSecurityGroup, ec2.Port.tcp(3000), "ALB only");
     this.redisSecurityGroup.addIngressRule(this.backendSecurityGroup, ec2.Port.tcp(6379), "Backend only");

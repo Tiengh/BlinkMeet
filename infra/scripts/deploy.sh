@@ -17,19 +17,22 @@ check_aws_identity
 check_bootstrap
 
 if [[ "$COMPONENT" != frontend ]]; then
-  for suffix in MONGO_SECRET_ARN JWT_SECRET_ARN STREAM_API_SECRET_ARN TURN_SECRET_ARN; do
+  for suffix in JWT_SECRET_ARN STREAM_API_SECRET_ARN TURN_SECRET_ARN; do
     var="${PREFIX}${suffix}"
     arn="${!var:-}"
     if [[ -z "$arn" ]]; then
-      [[ "$suffix" == MONGO_SECRET_ARN || "$suffix" == JWT_SECRET_ARN ]] && fail "$var is required"
+      [[ "$suffix" == JWT_SECRET_ARN ]] && fail "$var is required"
       continue
     fi
     aws secretsmanager describe-secret --secret-id "$arn" --query ARN --output text >/dev/null ||
       fail "Secret $var is unavailable"
   done
-  api_cert_var="${PREFIX}API_CERTIFICATE_ARN"
-  aws acm describe-certificate --certificate-arn "${!api_cert_var:-}" --query 'Certificate.Status' --output text | grep -qx ISSUED ||
-    fail "API certificate must be ISSUED in $REGION"
+  api_domain_var="${PREFIX}API_DOMAIN"
+  if [[ -n "${!api_domain_var:-}" ]]; then
+    api_cert_var="${PREFIX}API_CERTIFICATE_ARN"
+    aws acm describe-certificate --certificate-arn "${!api_cert_var:-}" --query 'Certificate.Status' --output text | grep -qx ISSUED ||
+      fail "API certificate must be ISSUED in $REGION"
+  fi
 fi
 if [[ "$COMPONENT" != backend ]]; then
   front_cert_var="${PREFIX}FRONTEND_CERTIFICATE_ARN"
@@ -38,6 +41,16 @@ if [[ "$COMPONENT" != backend ]]; then
 fi
 
 note "Installing and validating CDK for component=$COMPONENT"
+if [[ "$COMPONENT" != frontend ]]; then
+  command -v docker >/dev/null || fail "Install Docker for DynamoDB Local integration checks"
+  (cd "$INFRA_DIR/.." && docker compose up -d dynamodb redis)
+  (cd "$INFRA_DIR/../backend" && npm ci --no-audit --no-fund && \
+    DYNAMODB_ENDPOINT=http://127.0.0.1:8000 npm run db:local:init && \
+    DYNAMODB_ENDPOINT=http://127.0.0.1:8000 npm test && npm run lint)
+fi
+if [[ "$COMPONENT" != backend ]]; then
+  (cd "$INFRA_DIR/../frontend" && npm ci --no-audit --no-fund && npm run build && npm run lint)
+fi
 (cd "$CDK_DIR" && npm ci --no-audit --no-fund && npm run build && npm test)
 scoped_cdk synth "${SELECTED_STACKS[@]}" >/dev/null
 scoped_cdk diff "${SELECTED_STACKS[@]}"
@@ -48,24 +61,20 @@ read -r -p "Type 'deploy $STAGE $ACCOUNT $COMPONENT' to continue: " confirmation
 [[ "$confirmation" == "deploy $STAGE $ACCOUNT $COMPONENT" ]] || fail "Deployment cancelled"
 
 if [[ "$COMPONENT" != frontend ]]; then
-  # Deploy foundational resources first; no frontend/CloudFront dependency.
-  for stack in "${BACKEND_STACKS[@]:0:3}"; do
-    scoped_cdk deploy "$stack" --require-approval never
-  done
-  note "Allowlist all NAT IPs (/32) in MongoDB Atlas:"
-  aws cloudformation describe-stacks --stack-name "${BACKEND_STACKS[0]}" \
-    --query "Stacks[0].Outputs[?starts_with(OutputKey, 'NatPublicIp')].[OutputKey,OutputValue]" --output table
+  # ECR must exist before the image can be published. Check it before billable VPC/Redis resources.
+  scoped_cdk deploy "${BACKEND_STACKS[2]}" --require-approval never
   image_tag_var="${PREFIX}IMAGE_TAG"
   image_tag="${!image_tag_var:-}"
   [[ -n "$image_tag" ]] || fail "$image_tag_var is required"
   aws ecr describe-images --repository-name "blinkmeet-$STAGE-backend" --image-ids "imageTag=$image_tag" \
     --query 'imageDetails[0].imageDigest' --output text >/dev/null ||
     fail "ECR image $image_tag is missing. Build and push it before continuing."
-  read -r -p "After Atlas IP allowlisting, type 'atlas $STAGE $ACCOUNT': " atlas_confirmation
-  [[ "$atlas_confirmation" == "atlas $STAGE $ACCOUNT" ]] || fail "Atlas allowlisting was not confirmed"
-  scoped_cdk deploy "${BACKEND_STACKS[3]}" --require-approval never
-  cluster="$(stack_output "${BACKEND_STACKS[3]}" ClusterName)"
-  service="$(stack_output "${BACKEND_STACKS[3]}" ServiceName)"
+  for stack in "${BACKEND_STACKS[0]}" "${BACKEND_STACKS[1]}" "${BACKEND_STACKS[3]}"; do
+    scoped_cdk deploy "$stack" --require-approval never
+  done
+  scoped_cdk deploy "${BACKEND_STACKS[4]}" --require-approval never
+  cluster="$(stack_output "${BACKEND_STACKS[4]}" ClusterName)"
+  service="$(stack_output "${BACKEND_STACKS[4]}" ServiceName)"
   aws ecs wait services-stable --cluster "$cluster" --services "$service" ||
     fail "ECS service did not stabilize"
 fi

@@ -27,9 +27,9 @@ load_stage() {
   REGION="${!REGION_VAR:-}"
   [[ "$ACCOUNT" =~ ^[0-9]{12}$ ]] || fail "$ACCOUNT_VAR must be a 12-digit AWS account ID"
   [[ "$REGION" =~ ^[a-z]{2}-[a-z]+-[0-9]$ ]] || fail "$REGION_VAR must be an AWS Region"
-  BACKEND_STACKS=("BlinkMeet${STAGE_CAP}Network" "BlinkMeet${STAGE_CAP}Registry" "BlinkMeet${STAGE_CAP}Redis" "BlinkMeet${STAGE_CAP}Backend")
+  BACKEND_STACKS=("BlinkMeet${STAGE_CAP}Network" "BlinkMeet${STAGE_CAP}DynamoDb" "BlinkMeet${STAGE_CAP}Registry" "BlinkMeet${STAGE_CAP}Redis" "BlinkMeet${STAGE_CAP}Backend")
   FRONTEND_STACK="BlinkMeet${STAGE_CAP}Frontend"
-  STACKS=("${BACKEND_STACKS[@]:0:3}" "$FRONTEND_STACK" "${BACKEND_STACKS[3]}")
+  STACKS=("${BACKEND_STACKS[@]:0:4}" "$FRONTEND_STACK" "${BACKEND_STACKS[4]}")
 }
 
 check_aws_identity() {

@@ -36,6 +36,15 @@ services:
       NODE_ENV: development
       PORT: 5001
       REDIS_URL: redis://redis:6379
+      DYNAMODB_ENDPOINT: http://dynamodb:8000
+      AWS_REGION: ap-southeast-1
+      DYNAMODB_TABLE_USERS: blinkmeet-local-users
+      DYNAMODB_TABLE_EMAILS: blinkmeet-local-emails
+      DYNAMODB_TABLE_FRIEND_REQUESTS: blinkmeet-local-friendrequests
+      DYNAMODB_TABLE_FRIENDSHIPS: blinkmeet-local-friendships
+      DYNAMODB_TABLE_CONVERSATIONS: blinkmeet-local-conversations
+      DYNAMODB_TABLE_MESSAGES: blinkmeet-local-messages
+      DYNAMODB_TABLE_MESSAGE_KEYS: blinkmeet-local-messagekeys
       # Local defaults are intentionally limited to same-machine development.
       # For cross-network testing configure TURN_PUBLIC_HOST,
       # TURN_EXTERNAL_IP and a non-default TURN_SHARED_SECRET explicitly.
@@ -51,12 +60,13 @@ services:
       - /app/node_modules
 
     depends_on:
-      mongo:
-        condition: service_healthy
+      dynamodb:
+        condition: service_started
       redis:
         condition: service_healthy
       coturn:
         condition: service_healthy
+    command: ["sh", "-c", "node scripts/create-local-tables.js && node src/server.js"]
 
   coturn:
     image: coturn/coturn:4.18.0-r0
@@ -70,8 +80,8 @@ services:
       - --static-auth-secret=${TURN_SHARED_SECRET:-blinkmeet-local-turn-secret}
       - --realm=${TURN_REALM:-blinkmeet.local}
       - --external-ip=${TURN_EXTERNAL_IP:-127.0.0.1}
-      - --min-port=49160
-      - --max-port=49200
+      - --min-port=${TURN_RELAY_MIN_PORT:-55000}
+      - --max-port=${TURN_RELAY_MAX_PORT:-55020}
       - --stale-nonce=600
       - --user-quota=4
       - --total-quota=100
@@ -80,7 +90,7 @@ services:
     ports:
       - "3478:3478"
       - "3478:3478/udp"
-      - "49160-49200:49160-49200/udp"
+      - "${TURN_RELAY_MIN_PORT:-55000}-${TURN_RELAY_MAX_PORT:-55020}:${TURN_RELAY_MIN_PORT:-55000}-${TURN_RELAY_MAX_PORT:-55020}/udp"
       - "127.0.0.1:9641:9641"
     healthcheck:
       test: ["CMD-SHELL", "turnutils_stunclient 127.0.0.1 >/dev/null 2>&1"]
@@ -89,23 +99,14 @@ services:
       retries: 10
       start_period: 5s
 
-  mongo:
-    image: mongo:8
-
-    container_name: blinkmeet-mongo
-
+  dynamodb:
+    image: amazon/dynamodb-local:2.6.1
+    user: root
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/home/dynamodblocal/data"]
     ports:
-      - "27017:27017"
-
+      - "127.0.0.1:8000:8000"
     volumes:
-      - mongo_data:/data/db
-
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
+      - dynamodb_data:/home/dynamodblocal/data
 
   redis:
     image: redis:7-alpine
@@ -118,4 +119,4 @@ services:
       retries: 10
 
 volumes:
-  mongo_data:
+  dynamodb_data:

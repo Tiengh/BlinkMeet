@@ -6,6 +6,7 @@ import { RegistryStack } from "../lib/registry-stack";
 import { RedisStack } from "../lib/redis-stack";
 import { FrontendStack } from "../lib/frontend-stack";
 import { BackendStack } from "../lib/backend-stack";
+import { DynamoDbStack } from "../lib/dynamodb-stack";
 
 const app = new App();
 const component = String(app.node.tryGetContext("component") || "all");
@@ -29,7 +30,8 @@ if (component !== "frontend") {
   const network = new NetworkStack(app, `${name}Network`, config, { env });
   const registry = new RegistryStack(app, `${name}Registry`, config, { env });
   const redis = new RedisStack(app, `${name}Redis`, config, network, { env });
-  new BackendStack(app, `${name}Backend`, config, network, redis, registry.repository, { env });
+  const dynamo = new DynamoDbStack(app, `${name}DynamoDb`, config, { env });
+  new BackendStack(app, `${name}Backend`, config, network, redis, dynamo, registry.repository, { env });
 }
 if (component !== "backend") {
   new FrontendStack(app, `${name}Frontend`, config, { env });

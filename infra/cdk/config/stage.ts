@@ -15,7 +15,6 @@ export interface StageConfig {
   frontendDomain: string;
   apiCertificateArn: string;
   frontendCertificateArn: string;
-  mongoSecretArn: string;
   jwtSecretArn: string;
   streamApiKey?: string;
   streamApiSecretArn?: string;
@@ -56,12 +55,12 @@ export function loadStageConfig(
   if (includeBackend && (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(imageTag) || imageTag === "latest")) {
     throw new Error(`${prefix}IMAGE_TAG must be an immutable, non-latest tag`);
   }
-  const apiDomain = required(env, `${prefix}API_DOMAIN`);
-  const frontendDomain = required(env, `${prefix}FRONTEND_DOMAIN`);
-  if (apiDomain === frontendDomain || !apiDomain.includes(".") || !frontendDomain.includes(".")) {
+  const apiDomain = env[`${prefix}API_DOMAIN`]?.trim() || "";
+  const frontendDomain = env[`${prefix}FRONTEND_DOMAIN`]?.trim() || "";
+  if (includeFrontend && (!apiDomain.includes(".") || !frontendDomain.includes(".") || apiDomain === frontendDomain)) {
     throw new Error("API_DOMAIN and FRONTEND_DOMAIN must be different DNS names");
   }
-  if (apiDomain.split(".").slice(1).join(".") !== frontendDomain.split(".").slice(1).join(".")) {
+  if (apiDomain && frontendDomain && apiDomain.split(".").slice(1).join(".") !== frontendDomain.split(".").slice(1).join(".")) {
     throw new Error("API_DOMAIN and FRONTEND_DOMAIN must be sibling subdomains for SameSite cookies");
   }
   const turnUrls = env[`${prefix}TURN_URLS`]?.trim();
@@ -70,9 +69,9 @@ export function loadStageConfig(
   if (turnUrls && (!turnExternalIp || !turnSecretArn)) {
     throw new Error("TURN_URLS requires TURN_EXTERNAL_IP and TURN_SECRET_ARN");
   }
-  const apiCertificateArn = includeBackend ? required(env, `${prefix}API_CERTIFICATE_ARN`) : "";
+  const apiCertificateArn = includeBackend && apiDomain ? required(env, `${prefix}API_CERTIFICATE_ARN`) : "";
   const frontendCertificateArn = includeFrontend ? required(env, `${prefix}FRONTEND_CERTIFICATE_ARN`) : "";
-  if (includeBackend && !apiCertificateArn.startsWith(`arn:aws:acm:${region}:${account}:certificate/`)) {
+  if (includeBackend && apiDomain && !apiCertificateArn.startsWith(`arn:aws:acm:${region}:${account}:certificate/`)) {
     throw new Error("API_CERTIFICATE_ARN must belong to the deployment account and Region");
   }
   if (includeFrontend && !frontendCertificateArn.startsWith(`arn:aws:acm:us-east-1:${account}:certificate/`)) {
@@ -92,7 +91,6 @@ export function loadStageConfig(
     frontendDomain,
     apiCertificateArn,
     frontendCertificateArn,
-    mongoSecretArn: includeBackend ? required(env, `${prefix}MONGO_SECRET_ARN`) : "",
     jwtSecretArn: includeBackend ? required(env, `${prefix}JWT_SECRET_ARN`) : "",
     streamApiKey: env[`${prefix}STREAM_API_KEY`]?.trim(),
     streamApiSecretArn: env[`${prefix}STREAM_API_SECRET_ARN`]?.trim(),

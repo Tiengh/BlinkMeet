@@ -8,6 +8,7 @@ import { RedisStack } from "../lib/redis-stack";
 import { RegistryStack } from "../lib/registry-stack";
 import { FrontendStack } from "../lib/frontend-stack";
 import { BackendStack } from "../lib/backend-stack";
+import { DynamoDbStack } from "../lib/dynamodb-stack";
 
 const env = {
   BLINKMEET_DEV_ACCOUNT_ID: "123456789012",
@@ -18,7 +19,6 @@ const env = {
   BLINKMEET_DEV_FRONTEND_DOMAIN: "app.dev.example.com",
   BLINKMEET_DEV_API_CERTIFICATE_ARN: "arn:aws:acm:ap-southeast-1:123456789012:certificate/api",
   BLINKMEET_DEV_FRONTEND_CERTIFICATE_ARN: "arn:aws:acm:us-east-1:123456789012:certificate/frontend",
-  BLINKMEET_DEV_MONGO_SECRET_ARN: "arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:mongo-AbCdEf",
   BLINKMEET_DEV_JWT_SECRET_ARN: "arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:jwt-AbCdEf",
 };
 
@@ -35,12 +35,15 @@ test("dev infrastructure isolates Redis and ECS, uses TLS and private CloudFront
   const network = new NetworkStack(app, "BlinkMeetDevNetwork", config, props);
   const registry = new RegistryStack(app, "BlinkMeetDevRegistry", config, props);
   const redis = new RedisStack(app, "BlinkMeetDevRedis", config, network, props);
+  const dynamo = new DynamoDbStack(app, "BlinkMeetDevDynamoDb", config, props);
   const frontend = new FrontendStack(app, "BlinkMeetDevFrontend", config, props);
-  const backend = new BackendStack(app, "BlinkMeetDevBackend", config, network, redis, registry.repository, props);
+  const backend = new BackendStack(app, "BlinkMeetDevBackend", config, network, redis, dynamo, registry.repository, props);
 
   const networkTemplate = Template.fromStack(network);
   networkTemplate.resourceCountIs("AWS::EC2::NatGateway", 1);
   networkTemplate.resourceCountIs("AWS::EC2::Subnet", 6);
+  networkTemplate.resourceCountIs("AWS::EC2::VPCEndpoint", 1);
+  Template.fromStack(dynamo).resourceCountIs("AWS::DynamoDB::Table", 7);
   const redisTemplate = Template.fromStack(redis);
   redisTemplate.hasResourceProperties("AWS::ElastiCache::ReplicationGroup", {
     TransitEncryptionEnabled: true,
@@ -63,6 +66,10 @@ test("dev infrastructure isolates Redis and ECS, uses TLS and private CloudFront
     },
   });
   const backendTemplate = Template.fromStack(backend);
+  const backendJson = JSON.stringify(backendTemplate.toJSON());
+  assert.match(backendJson, /dynamodb:TransactWriteItems/);
+  assert.match(backendJson, /dynamodb:Query/);
+  assert.doesNotMatch(backendJson, /dynamodb:Scan/);
   backendTemplate.hasResourceProperties("AWS::ECS::Service", {
     DesiredCount: 2,
     NetworkConfiguration: { AwsvpcConfiguration: { AssignPublicIp: "DISABLED" } },
@@ -80,7 +87,8 @@ test("dev infrastructure isolates Redis and ECS, uses TLS and private CloudFront
   const container = task.Properties.ContainerDefinitions[0];
   assert.ok(container.Environment.some((entry) => entry.Name === "COOKIE_SAME_SITE" && entry.Value === "lax"));
   assert.ok(container.Environment.some((entry) => entry.Name === "NODE_ENV" && entry.Value === "production"));
-  assert.ok(container.Secrets.some((entry) => entry.Name === "MONGO_URL"));
+  assert.ok(container.Environment.some((entry) => entry.Name === "DYNAMODB_TABLE_USERS"));
+  assert.ok(!container.Environment.some((entry) => entry.Name === "MONGO_URL" || entry.Name === "AWS_ACCESS_KEY_ID"));
   assert.ok(container.Secrets.some((entry) => entry.Name === "JWT_SECRET_KEY"));
 });
 
@@ -112,12 +120,34 @@ test("scoped deployments only require configuration for their component", () => 
   const frontend = loadStageConfig("dev", {
     ...env,
     BLINKMEET_DEV_API_CERTIFICATE_ARN: "",
-    BLINKMEET_DEV_MONGO_SECRET_ARN: "",
     BLINKMEET_DEV_JWT_SECRET_ARN: "",
     BLINKMEET_DEV_IMAGE_TAG: "",
   }, "frontend");
   assert.equal(frontend.apiCertificateArn, "");
   assert.equal(frontend.imageTag, "");
-  assert.equal(frontend.mongoSecretArn, "");
+  assert.equal(frontend.frontendDomain, env.BLINKMEET_DEV_FRONTEND_DOMAIN);
   assert.throws(() => loadStageConfig("dev", env, "broken" as "all"), /component/);
+});
+
+test("backend-only supports private domainless infrastructure", () => {
+  const config = loadStageConfig("dev", {
+    ...env,
+    BLINKMEET_DEV_API_DOMAIN: "",
+    BLINKMEET_DEV_FRONTEND_DOMAIN: "",
+    BLINKMEET_DEV_API_CERTIFICATE_ARN: "",
+    BLINKMEET_DEV_FRONTEND_CERTIFICATE_ARN: "",
+  }, "backend");
+  const app = new App();
+  const props = { env: { account: config.account, region: config.region } };
+  const network = new NetworkStack(app, "Network", config, props);
+  const registry = new RegistryStack(app, "Registry", config, props);
+  const redis = new RedisStack(app, "Redis", config, network, props);
+  const dynamo = new DynamoDbStack(app, "Dynamo", config, props);
+  const backend = new BackendStack(app, "Backend", config, network, redis, dynamo, registry.repository, props);
+  Template.fromStack(backend).hasResourceProperties("AWS::ElasticLoadBalancingV2::LoadBalancer", {
+    Scheme: "internal",
+  });
+  Template.fromStack(backend).hasResourceProperties("AWS::ElasticLoadBalancingV2::Listener", {
+    Port: 80, Protocol: "HTTP",
+  });
 });

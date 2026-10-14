@@ -3,7 +3,6 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
-import mongoose from "mongoose";
 import authRoutes from "./modules/auth/auth.routes.js";
 import userRoutes from "./modules/user/user.routes.js";
 import friendRoutes from "./modules/friend/friend.routes.js";
@@ -14,6 +13,8 @@ import { errorMiddleware } from "./middleware/error.middleware.js";
 import { corsOptions } from "./shared/cors.config.js";
 import { securityConfig } from "./shared/security.config.js";
 import { getRedisClient } from "./infrastructure/redis/redis.client.js";
+import { checkDynamoReady } from "./infrastructure/database/dynamodb.js";
+import { isWebSocketAdapterReady } from "./infrastructure/websocket/websocket.server.js";
 
 const app = express();
 
@@ -46,9 +47,20 @@ app.get("/api/health", (req, res) => {
   res.status(200).json({ success: true, message: "BlinkMeet backend is running" });
 });
 
-app.get("/api/health/ready", (req, res) => {
-  const ready = mongoose.connection.readyState === 1 && getRedisClient().isReady;
-  res.status(ready ? 200 : 503).json({ success: ready });
+let readiness = { checkedAt: 0, healthy: false };
+app.get("/api/health/ready", async (req, res) => {
+  if (Date.now() - readiness.checkedAt > 5_000) {
+    try {
+      if (!getRedisClient().isReady || !isWebSocketAdapterReady()) {
+        throw new Error("Redis or Socket.IO adapter is unavailable");
+      }
+      await checkDynamoReady();
+      readiness = { checkedAt: Date.now(), healthy: true };
+    } catch {
+      readiness = { checkedAt: Date.now(), healthy: false };
+    }
+  }
+  res.status(readiness.healthy ? 200 : 503).json({ success: readiness.healthy });
 });
 
 // Frontend assets are hosted by S3 + CloudFront, not by the ECS API container.

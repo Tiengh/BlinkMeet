@@ -1,6 +1,5 @@
 import jwt from "jsonwebtoken";
-import mongoose from "mongoose";
-import User from "../modules/user/user.model.js";
+import { findUserById } from "../modules/user/user.repository.js";
 import { UnauthorizedError } from "../shared/errors/unauthorized.error.js";
 
 export const protectRoute = async (req, res, next) => {
@@ -15,11 +14,11 @@ export const protectRoute = async (req, res, next) => {
     });
     if (
       typeof decoded.userId !== "string" ||
-      !mongoose.isObjectIdOrHexString(decoded.userId)
+      !/^[a-f\d]{24}$/i.test(decoded.userId)
     ) {
       throw new UnauthorizedError("Unauthorized - Invalid token");
     }
-    const user = await User.findById(decoded.userId).select("-user_password");
+    const user = await findUserById(decoded.userId);
 
     if (!user) {
       throw new UnauthorizedError("Unauthorized - User not found");

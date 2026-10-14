@@ -1,7 +1,6 @@
 import { parse as parseCookie } from "cookie";
 import jwt from "jsonwebtoken";
-import mongoose from "mongoose";
-import User from "../../modules/user/user.model.js";
+import { findUserById } from "../../modules/user/user.repository.js";
 
 const unauthorized = (message) => {
   const error = new Error(message);
@@ -10,7 +9,7 @@ const unauthorized = (message) => {
 };
 
 export const createSocketAuthMiddleware = ({
-  findUser = (userId) => User.findById(userId).select("-user_password"),
+  findUser = findUserById,
   jwtSecret = process.env.JWT_SECRET_KEY,
 } = {}) => async (socket, next) => {
   try {
@@ -24,7 +23,7 @@ export const createSocketAuthMiddleware = ({
     const decoded = jwt.verify(token, jwtSecret, { algorithms: ["HS256"] });
     if (
       typeof decoded.userId !== "string" ||
-      !mongoose.isObjectIdOrHexString(decoded.userId)
+      !/^[a-f\d]{24}$/i.test(decoded.userId)
     ) {
       next(unauthorized("Unauthorized - Invalid token"));
       return;

@@ -1,12 +1,8 @@
 export const toPublicUser = (user) => {
-  const safeUser = user?.toObject ? user.toObject() : user;
-
-  if (!safeUser) {
-    return null;
-  }
-
-  const publicUser = { ...safeUser };
+  if (!user) {return null;}
+  const publicUser = { ...user };
   delete publicUser.user_password;
+  delete publicUser.recommendationBucket;
 
   return publicUser;
 };

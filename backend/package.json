@@ -9,14 +9,16 @@
     "test": "node --test",
     "lint": "eslint src scripts",
     "lint:fix": "eslint src scripts --fix",
-    "migrate:normalize-emails": "node scripts/normalize-user-emails.js",
-    "migrate:normalize-emails:dry-run": "node scripts/normalize-user-emails.js --dry-run"
+    "db:local:init": "node scripts/create-local-tables.js",
+    "smoke:local": "node scripts/smoke-local.js"
   },
   "keywords": [],
   "author": "",
   "type": "module",
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1151.0",
+    "@aws-sdk/lib-dynamodb": "^3.1151.0",
     "@socket.io/redis-adapter": "^8.3.0",
     "bcryptjs": "^3.0.2",
     "cookie": "^1.1.1",
@@ -26,7 +28,6 @@
     "express": "^4.21.0",
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.13.2",
     "redis": "^5.12.1",
     "socket.io": "^4.8.3",
     "stream-chat": "^8.60.0"

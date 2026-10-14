@@ -15,6 +15,7 @@ const RealtimeProvider = ({ userId, children }) => {
   const socketRef = useRef(null);
   const requestedUserIdsRef = useRef([]);
   const subscriptionRequestRef = useRef(0);
+  const connectionVersionRef = useRef(0);
 
   const applyStatuses = useCallback((statuses) => {
     setPresenceStatuses((current) => {
@@ -69,15 +70,26 @@ const RealtimeProvider = ({ userId, children }) => {
     setSocket(socket);
 
     const handleConnect = () => {
+      const connectionVersion = ++connectionVersionRef.current;
       setIsConnected(true);
       void subscribePresence(requestedUserIdsRef.current).catch((error) => {
         console.error("Could not subscribe to friend presence:", error);
       });
-      void emitWithAck(socket, "chat:sync-delivered", {}).catch((error) => {
+      void (async () => {
+        let cursor = null;
+        do {
+          const response = await emitWithAck(socket, "chat:sync-delivered", { cursor }, 20_000);
+          cursor = response.nextCursor;
+          if (cursor) {await new Promise((resolve) => setTimeout(resolve, 3_100));}
+        } while (cursor && socket.connected && connectionVersion === connectionVersionRef.current);
+      })().catch((error) => {
         console.error("Could not reconcile pending chat deliveries:", error);
       });
     };
-    const handleDisconnect = () => setIsConnected(false);
+    const handleDisconnect = () => {
+      connectionVersionRef.current += 1;
+      setIsConnected(false);
+    };
     const handlePresenceChanged = ({
       userId: changedUserId,
       status,
@@ -110,6 +122,7 @@ const RealtimeProvider = ({ userId, children }) => {
     socket.connect();
 
     return () => {
+      connectionVersionRef.current += 1;
       subscriptionRequestRef.current += 1;
       socket.off("connect", handleConnect);
       socket.off("disconnect", handleDisconnect);

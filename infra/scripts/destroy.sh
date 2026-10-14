@@ -14,15 +14,15 @@ for ((i=${#STACKS[@]}-1; i>=0; i--)); do
   stack="${STACKS[i]}"
   if stack_exists "$stack"; then note "  $stack"; else note "  $stack (absent)"; fi
 done
-note "This removes dev NAT/EIPs, ALB, ECS, Redis, CloudFront, dev S3 objects and dev ECR images."
-note "Retained resources, snapshots and MongoDB Atlas data/allowlist entries need separate review."
+note "This removes dev NAT/EIPs, ALB, ECS, Redis, DynamoDB tables/data, CloudFront, dev S3 objects and dev ECR images."
+note "The dev DynamoDB data policy is disposable; production tables remain protected."
 [[ -t 0 ]] || fail "Interactive confirmation is required; unattended destroy is disabled"
 read -r -p "Type 'destroy $STAGE $ACCOUNT' to continue: " confirmation
 [[ "$confirmation" == "destroy $STAGE $ACCOUNT" ]] || fail "Destruction cancelled"
 
 frontend_bucket=""
-if stack_exists "${STACKS[3]}"; then
-  frontend_bucket="$(stack_output "${STACKS[3]}" FrontendBucketName)"
+if stack_exists "${STACKS[4]}"; then
+  frontend_bucket="$(stack_output "${STACKS[4]}" FrontendBucketName)"
 fi
 for ((i=${#STACKS[@]}-1; i>=0; i--)); do
   stack="${STACKS[i]}"
@@ -50,4 +50,4 @@ if [[ -n "$frontend_bucket" && "$frontend_bucket" != None ]]; then
     note "S3 bucket still exists: $frontend_bucket"
   fi
 fi
-note "Inspect Redis snapshots, ECR repositories/images and Atlas NAT IP entries separately. MongoDB Atlas was not modified."
+note "Inspect any retained DynamoDB tables, Redis snapshots and ECR images separately."

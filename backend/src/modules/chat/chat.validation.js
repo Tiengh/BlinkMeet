@@ -35,5 +35,8 @@ export const parseHistoryLimit = (value) => {
 
 export const parseMessageCursor = (value) => {
   if (value === undefined) {return null;}
-  return parseObjectId(value, "before cursor");
+  if (typeof value !== "string" || value.length > 512 || !/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw new BadRequestError("before cursor is invalid");
+  }
+  return value;
 };
